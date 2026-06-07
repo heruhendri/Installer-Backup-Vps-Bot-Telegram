@@ -13,12 +13,17 @@ Support: https://t.me/GbtTapiPngnSndiri
 echo "$WATERMARK_INSTALL"
 echo ""
 
+# Install dependencies
+apt-get update && apt-get install -y jq curl rsync zip unzip || echo "[WARN] Gagal menginstall dependensi, pastikan Anda root."
+
 INSTALL_DIR="/opt/auto-backup"
 CONFIG_FILE="$INSTALL_DIR/config.conf"
 MENU_FILE="$INSTALL_DIR/menu.sh"
 RUNNER="$INSTALL_DIR/backup-runner.sh"
+BOT_CONTROL="$INSTALL_DIR/bot-control.sh"
 SERVICE_FILE="/etc/systemd/system/auto-backup.service"
 TIMER_FILE="/etc/systemd/system/auto-backup.timer"
+BOT_SERVICE_FILE="/etc/systemd/system/auto-backup-bot.service"
 
 mkdir -p "$INSTALL_DIR"
 chmod 755 "$INSTALL_DIR"
@@ -46,6 +51,7 @@ if [[ "$UPDATE_CONFIG" == "y" ]]; then
     read -p "Masukkan TOKEN Bot Telegram: " BOT_TOKEN
     read -p "Masukkan CHAT_ID Telegram: " CHAT_ID
     read -p "Masukkan folder yang mau di-backup (comma separated, contoh: /etc,/var/www): " FOLDERS_RAW
+    read -p "Backup SELURUH sistem VPS? (y/n): " USE_FULL_BACKUP
 
     read -p "Backup MySQL? (y/n): " USE_MYSQL
     MYSQL_MULTI_CONF=""
@@ -141,6 +147,7 @@ if [[ "$UPDATE_CONFIG" == "y" ]]; then
 BOT_TOKEN="$BOT_TOKEN"
 CHAT_ID="$CHAT_ID"
 FOLDERS_RAW="$FOLDERS_RAW"
+USE_FULL_BACKUP="$USE_FULL_BACKUP"
 
 USE_MYSQL="$USE_MYSQL"
 MYSQL_MULTI_CONF="$MYSQL_MULTI_CONF"
@@ -163,6 +170,7 @@ else
     source "$CONFIG_FILE"
     # ensure defaults exist
     FOLDERS_RAW=${FOLDERS_RAW:-""}
+    USE_FULL_BACKUP=${USE_FULL_BACKUP:-n}
     MYSQL_MULTI_CONF=${MYSQL_MULTI_CONF:-""}
     MONGO_MULTI_CONF=${MONGO_MULTI_CONF:-""}
     RETENTION_DAYS=${RETENTION_DAYS:-30}
@@ -205,6 +213,16 @@ for f in "${FOLDERS[@]}"; do
         cp -a "$f" "$TMP_DIR/" || true
     fi
 done
+
+# Full System Backup logic
+if [[ "${USE_FULL_BACKUP:-n}" == "y" ]]; then
+    echo "[INFO] Memulai Full System Backup (skipping system dirs)..."
+    mkdir -p "$TMP_DIR/full_system"
+    tar -cpzf "$TMP_DIR/full_system/root_backup.tar.gz" \
+        --exclude=/proc/* --exclude=/sys/* --exclude=/dev/* \
+        --exclude=/run/* --exclude=/tmp/* --exclude=/lost+found \
+        --exclude="${INSTALL_DIR}/*" / || true
+fi
 
 # backup mysql
 if [[ "${USE_MYSQL:-n}" == "y" && ! -z "${MYSQL_MULTI_CONF:-}" ]]; then
@@ -335,6 +353,62 @@ chmod +x "$RUNNER"
 echo "[OK] Backup runner created: $RUNNER"
 
 # ======================================================
+# Create bot-control.sh (Telegram Inline Menu)
+# ======================================================
+cat > "$BOT_CONTROL" <<'BTC'
+#!/bin/bash
+CONFIG_FILE="/opt/auto-backup/config.conf"
+source "$CONFIG_FILE"
+RUNNER="/opt/auto-backup/backup-runner.sh"
+OFFSET=0
+
+send_msg() {
+    local text="$1"
+    local reply_markup="$2"
+    curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" \
+        -d "chat_id=$CHAT_ID" -d "text=$text" -d "reply_markup=$reply_markup"
+}
+
+MAIN_MENU='{"inline_keyboard":[[{"text":"🚀 Backup Sekarang","callback_data":"do_backup"},{"text":"🔄 Restore","callback_data":"do_restore"}],[{"text":"📊 Status","callback_data":"do_status"}]]}'
+
+while true; do
+    UPDATES=$(curl -s "https://api.telegram.org/bot$BOT_TOKEN/getUpdates?offset=$OFFSET&timeout=30")
+    NUM_UPDATES=$(echo "$UPDATES" | jq '.result | length')
+
+    for (( i=0; i<$NUM_UPDATES; i++ )); do
+        OFFSET=$(echo "$UPDATES" | jq ".result[$i].update_id + 1")
+        
+        # Handle Command /start
+        MSG_TEXT=$(echo "$UPDATES" | jq -r ".result[$i].message.text // empty")
+        if [[ "$MSG_TEXT" == "/start" ]]; then
+            send_msg "Selamat Datang di VPS Backup Bot. Pilih aksi:" "$MAIN_MENU"
+        fi
+
+        # Handle Callback Query
+        CALLBACK_DATA=$(echo "$UPDATES" | jq -r ".result[$i].callback_query.data // empty")
+        if [[ -n "$CALLBACK_DATA" ]]; then
+            case "$CALLBACK_DATA" in
+                do_backup)
+                    send_msg "Memulai proses backup..." "{}"
+                    bash "$RUNNER" &
+                    ;;
+                do_status)
+                    STATUS=$(systemctl is-active auto-backup.timer)
+                    LAST=$(ls -t /opt/auto-backup/backups/ | head -n1)
+                    send_msg "Status Timer: $STATUS\nBackup Terakhir: $LAST" "$MAIN_MENU"
+                    ;;
+                do_restore)
+                    send_msg "Gunakan menu di terminal VPS (menu-bot-backup) untuk restorasi selektif demi keamanan." "$MAIN_MENU"
+                    ;;
+            esac
+        fi
+    done
+    sleep 1
+done
+BTC
+chmod +x "$BOT_CONTROL"
+
+# ======================================================
 # Create systemd service & timer
 # ======================================================
 cat > "$SERVICE_FILE" <<EOF
@@ -364,9 +438,24 @@ Persistent=true
 WantedBy=timers.target
 EOF
 
+cat > "$BOT_SERVICE_FILE" <<EOF
+[Unit]
+Description=Telegram Bot Controller for VPS Backup
+After=network.target
+
+[Service]
+ExecStart=$BOT_CONTROL
+Restart=always
+User=root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
 systemctl daemon-reload || true
 systemctl enable auto-backup.service || true
 systemctl enable --now auto-backup.timer || true
+systemctl enable --now auto-backup-bot.service || true
 
 echo "[OK] systemd service & timer configured."
 
@@ -408,6 +497,7 @@ source "$CONFIG"
 BOT_TOKEN="${BOT_TOKEN:-}"
 CHAT_ID="${CHAT_ID:-}"
 FOLDERS_RAW="${FOLDERS_RAW:-}"
+USE_FULL_BACKUP="${USE_FULL_BACKUP:-n}"
 USE_MYSQL="${USE_MYSQL:-n}"
 MYSQL_MULTI_CONF="${MYSQL_MULTI_CONF:-}"
 USE_MONGO="${USE_MONGO:-n}"
@@ -422,6 +512,7 @@ save_config() {
 BOT_TOKEN="$BOT_TOKEN"
 CHAT_ID="$CHAT_ID"
 FOLDERS_RAW="$FOLDERS_RAW"
+USE_FULL_BACKUP="$USE_FULL_BACKUP"
 
 USE_MYSQL="$USE_MYSQL"
 MYSQL_MULTI_CONF="$MYSQL_MULTI_CONF"
@@ -815,18 +906,27 @@ restore_backup() {
     SELECT="${files[$((NUM-1))]}"
     echo "File dipilih: $SELECT"
     echo "Isi file (preview):"
-    tar -tzf "$SELECT" | sed -n '1,30p'
-    if ! confirm "Lanjut restore dan timpa file sesuai archive ke root (/)? Pastikan backup cocok."; then
-        echo "Restore dibatalkan."
-        return
-    fi
+    tar -tf "$SELECT" | awk -F/ '{print $1}' | sort -u
+    
+    read -p "Ketik nama folder/file spesifik dari daftar di atas yang ingin di-restore (atau '*' untuk semua): " RESTORE_PATH
+    
     TMPREST="$INSTALL_DIR/restore_tmp_$(date +%s)"
     mkdir -p "$TMPREST"
-    tar -xzf "$SELECT" -C "$TMPREST"
-    echo "File diekstrak ke $TMPREST"
-    if confirm "Ekstrak ke / (akan menimpa file yang ada). Lanjut?"; then
-        rsync -a --delete "$TMPREST"/ /
-        echo "[OK] Restore selesai, files disalin ke /"
+    
+    if [[ "$RESTORE_PATH" == "*" ]]; then
+        tar -xzf "$SELECT" -C "$TMPREST"
+    else
+        tar -xzf "$SELECT" -C "$TMPREST" "$RESTORE_PATH" || { echo "Folder tidak ditemukan."; rm -rf "$TMPREST"; return; }
+    fi
+
+    echo "File diekstrak sementara ke $TMPREST"
+    if confirm "Lanjut salin data ini ke root (/) sistem?"; then
+        if [[ "$RESTORE_PATH" == "*" ]]; then
+            rsync -a "$TMPREST/" /
+        else
+            rsync -a "$TMPREST/$RESTORE_PATH" /$(dirname "$RESTORE_PATH")/
+        fi
+        echo "[OK] Restore selektif selesai."
         echo "[$(date '+%F %T')] Restore from $(basename "$SELECT")" >> "$LOGFILE"
     else
         echo "Restore dibatalkan. Menghapus temp..."
