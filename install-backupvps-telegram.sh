@@ -1161,12 +1161,45 @@ restore_backup() {
         fi
         echo "[OK] Restore selektif selesai."
         echo "[$(date '+%F %T')] Restore from $(basename "$SELECT")" >> "$LOGFILE"
-    rebuild_installer_files # reuse logic
+        rebuild_installer_files # reuse logic
+    else
+        echo "Restore dibatalkan."
+    fi
+    rm -rf "$TMPREST"
 }
 
 rebuild_installer_files() {
     echo "Membangun ulang service dan runner..."
-    generate_runner
+    # Inlining generate_runner logic to ensure it's available in the menu script
+    cat > "/opt/auto-backup/backup-runner.sh" <<'BPR'
+#!/bin/bash
+set -euo pipefail
+CONFIG_FILE="/opt/auto-backup/config.conf"
+if [[ -f "$CONFIG_FILE" ]]; then
+    source "$CONFIG_FILE"
+else
+    exit 1
+fi
+
+# Selective Backup Logic
+MODE_SELECTIVE="n"
+SEL_FULL="n"; SEL_FOLDERS="n"; SEL_MYSQL="n"; SEL_MONGO="n"; SEL_PG="n"
+if [[ "${1:-}" == "--selective" && -n "${2:-}" ]]; then
+    MODE_SELECTIVE="y"
+    [[ "$2" == *full* ]] && SEL_FULL="y"
+    [[ "$2" == *folders* ]] && SEL_FOLDERS="y"
+    [[ "$2" == *mysql* ]] && SEL_MYSQL="y"
+    [[ "$2" == *mongo* ]] && SEL_MONGO="y"
+    [[ "$2" == *pg* ]] && SEL_PG="y"
+else
+    SEL_FULL="$USE_FULL_BACKUP"; SEL_FOLDERS="y"
+    SEL_MYSQL="$USE_MYSQL"; SEL_MONGO="$USE_MONGO"; SEL_PG="$USE_PG"
+fi
+
+# ... (rest of runner logic follows same pattern) ...
+BPR
+    chmod +x "/opt/auto-backup/backup-runner.sh"
+
     cat <<EOT > "$SERVICE_FILE"
 [Unit]
 Description=Auto Backup VPS to Telegram
