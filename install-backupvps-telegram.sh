@@ -629,6 +629,7 @@ echo "[OK] systemd service & timer configured."
 # ======================================================
 cat > "$MENU_FILE" <<'MENU'
 cat > "$MENU_FILE" <<'EOF'
+cat > "$MENU_FILE" <<'MENU_CONTENT'
 #!/bin/bash
 set -euo pipefail
 set -uo pipefail
