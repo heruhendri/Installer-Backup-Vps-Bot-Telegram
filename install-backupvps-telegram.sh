@@ -34,12 +34,28 @@ if [[ -f "$CONFIG_FILE" ]]; then
     echo -e "[INFO] Konfigurasi ditemukan untuk Chat ID: ${CHAT_ID:-}"
     read -p "Update konfigurasi? (y/N): " RESP_UPD
     [[ "$RESP_UPD" =~ ^[Yy]$ ]] && UPDATE_CONFIG="y" || UPDATE_CONFIG="n"
+    echo -e "[INFO] Konfigurasi lama ditemukan (Chat ID: $CHAT_ID)."
+    read -p "Gunakan kredensial (Token/ChatID) yang ada? (Y/n): " KEEP_CRED
+    if [[ ! "$KEEP_CRED" =~ ^[Nn]$ ]]; then
+        SKIP_AUTH="y"
+        UPDATE_CONFIG="y"
+    else
+        SKIP_AUTH="n"
+        UPDATE_CONFIG="y"
+    fi
 else
     UPDATE_CONFIG="y"
+    SKIP_AUTH="n"
 fi
 
 if [[ "$UPDATE_CONFIG" == "y" ]]; then
     echo -e "\n--- MODE INSTALASI ---"
+    if [[ "$SKIP_AUTH" == "n" ]]; then
+        read -p "Masukkan TOKEN Bot Telegram: " BOT_TOKEN
+        read -p "Masukkan CHAT_ID Telegram: " CHAT_ID
+    fi
+
+    echo -e "\n--- MODE INSTALASI (By HENDRI) ---"
     echo "1) Quick Setup (Checkbox & Auto-detect DB)"
     echo "2) Custom Setup (Manual Detail)"
     read -p "Pilih mode (1/2): " SETUP_MODE
@@ -51,6 +67,7 @@ if [[ "$UPDATE_CONFIG" == "y" ]]; then
     if [[ "$SETUP_MODE" == "1" ]]; then
         # Quick Setup logic with Checkbox-style selection
         q_full="n"
+        q_full="y"
         q_mysql=$(command -v mysql >/dev/null 2>&1 && echo "y" || echo "n")
         q_mongo=$(command -v mongodump >/dev/null 2>&1 && echo "y" || echo "n")
         q_pg=$(command -v pg_dumpall >/dev/null 2>&1 && echo "y" || echo "n")
@@ -60,11 +77,34 @@ if [[ "$UPDATE_CONFIG" == "y" ]]; then
         # Quick Retention & TZ
         q_ret="7"
         q_tz="Asia/Jakarta"
+        # Folder management variables
+        f_etc="/etc"; use_etc="y"
+        f_www="/var/www"; use_www="y"
+        f_home="/home"; use_home="n"
+        f_root="/root"; use_root="n"
+        q_ret="${RETENTION_DAYS:-7}"
+        q_tz="${TZ:-Asia/Jakarta}"
+
+        pick_sub() {
+            local parent=$1
+            echo -e "\n--- Pilih Sub-folder di $parent ---"
+            local subdirs=($(ls -d "${parent}/"*/ 2>/dev/null | sed 's/\/$//'))
+            if [[ ${#subdirs[@]} -eq 0 ]]; then echo "Tidak ada sub-folder."; sleep 1; return "$parent"; fi
+            for i in "${!subdirs[@]}"; do echo "  [$((i+1))] $(basename "${subdirs[$i]}")"; done
+            read -p "Masukkan nomor (koma untuk banyak, ex: 1,3) atau ENTER untuk semua: " choice
+            if [[ -z "$choice" ]]; then echo "$parent"; else
+                local res=""
+                IFS=',' read -ra ADDR <<< "$choice"
+                for idx in "${ADDR[@]}"; do res+="${subdirs[$((idx-1))]},"; done
+                echo "${res%,}"
+            fi
+        }
 
         while true; do
             clear
             echo "$WATERMARK_INSTALL"
             echo "--- QUICK SETUP: CONFIGURATION ---"
+            echo "--- QUICK SETUP: COMPONENTS & FOLDERS ---"
             echo "🚀 KOMPONEN:"
             echo "  [1] [$( [[ "$q_full" == "y" ]] && echo "X" || echo " " )] Full System"
             echo "  [2] [$( [[ "$q_mysql" == "y" ]] && echo "X" || echo " " )] MySQL (Auto: $(command -v mysql >/dev/null 2>&1 && echo "OK" || echo "No"))"
@@ -75,6 +115,11 @@ if [[ "$UPDATE_CONFIG" == "y" ]]; then
             echo "  [6] [$( [[ "$f_www" == "y" ]] && echo "X" || echo " " )] /var/www"
             echo "  [7] [$( [[ "$f_home" == "y" ]] && echo "X" || echo " " )] /home"
             echo "  [8] [$( [[ "$f_root" == "y" ]] && echo "X" || echo " " )] /root"
+            echo "📂 FOLDER PATHS (Klik untuk pilih sub-folder):"
+            echo "  [5] [$( [[ "$use_etc" == "y" ]] && echo "X" || echo " " )] $f_etc"
+            echo "  [6] [$( [[ "$use_www" == "y" ]] && echo "X" || echo " " )] $f_www"
+            echo "  [7] [$( [[ "$use_home" == "y" ]] && echo "X" || echo " " )] $f_home"
+            echo "  [8] [$( [[ "$use_root" == "y" ]] && echo "X" || echo " " )] $f_root"
             echo "⏰ SETTINGS:"
             echo "  [9] Retention : $q_ret Hari (Toggle: 3, 7, 14, 30)"
             echo "  [10] Timezone : $q_tz (Toggle: Jakarta, Singapore, UTC)"
@@ -90,6 +135,10 @@ if [[ "$UPDATE_CONFIG" == "y" ]]; then
                 6) [[ "$f_www" == "y" ]] && f_www="n" || f_www="y" ;;
                 7) [[ "$f_home" == "y" ]] && f_home="n" || f_home="y" ;;
                 8) [[ "$f_root" == "y" ]] && f_root="n" || f_root="y" ;;
+                5) if [[ "$use_etc" == "y" ]]; then use_etc="n"; else use_etc="y"; f_etc=$(pick_sub "/etc"); fi ;;
+                6) if [[ "$use_www" == "y" ]]; then use_www="n"; else use_www="y"; f_www=$(pick_sub "/var/www"); fi ;;
+                7) if [[ "$use_home" == "y" ]]; then use_home="n"; else use_home="y"; f_home=$(pick_sub "/home"); fi ;;
+                8) if [[ "$use_root" == "y" ]]; then use_root="n"; else use_root="y"; f_root=$(pick_sub "/root"); fi ;;
                 9) case "$q_ret" in 3) q_ret="7";; 7) q_ret="14";; 14) q_ret="30";; *) q_ret="3";; esac ;;
                 10) case "$q_tz" in "Asia/Jakarta") q_tz="Asia/Singapore";; "Asia/Singapore") q_tz="UTC";; *) q_tz="Asia/Jakarta";; esac ;;
                 [Ss]) break ;;
@@ -105,6 +154,10 @@ if [[ "$UPDATE_CONFIG" == "y" ]]; then
         [[ "$f_www" == "y" ]] && FOLDERS_RAW+="/var/www,"
         [[ "$f_home" == "y" ]] && FOLDERS_RAW+="/home,"
         [[ "$f_root" == "y" ]] && FOLDERS_RAW+="/root,"
+        [[ "$use_etc" == "y" ]] && FOLDERS_RAW+="$f_etc,"
+        [[ "$use_www" == "y" ]] && FOLDERS_RAW+="$f_www,"
+        [[ "$use_home" == "y" ]] && FOLDERS_RAW+="$f_home,"
+        [[ "$use_root" == "y" ]] && FOLDERS_RAW+="$f_root,"
         FOLDERS_RAW="${FOLDERS_RAW%,}"
         
         MYSQL_MULTI_CONF="${MYSQL_MULTI_CONF:-}"; MONGO_MULTI_CONF="${MONGO_MULTI_CONF:-}"; CRON_TIME="*-*-* 03:00:00"
@@ -596,6 +649,7 @@ echo "[OK] systemd service & timer configured."
 # with watermark header+footer and menu status option
 # ======================================================
 cat > "$MENU_FILE" <<'MENU_FINAL_EOF'
+cat > "$MENU_FILE" <<'MENU_CONTENT_EOF'
 #!/bin/bash
 set -uo pipefail
 
