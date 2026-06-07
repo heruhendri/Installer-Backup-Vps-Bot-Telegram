@@ -3,7 +3,7 @@ set -uo pipefail
 clear
 
 WATERMARK_INSTALL="=== AUTO BACKUP VPS — INSTALLER ===
-Installer by: HENDRI
+Version: 4.0.0 | Installer by: HENDRI
 Support: https://t.me/GbtTapiPngnSndiri
 ========================================="
 WATERMARK_END="=== INSTALL COMPLETE — SCRIPT BY HENDRI ===

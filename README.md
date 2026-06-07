@@ -2,11 +2,11 @@
 
 # 📦 **bot-backup-vps-script**
 
-![License](https://img.shields.io/github/license/heruhendri/bot-backup-vps-script)
-![Stars](https://img.shields.io/github/stars/heruhendri/bot-backup-vps-script?style=social)
-![Forks](https://img.shields.io/github/forks/heruhendri/bot-backup-vps-script?style=social)
-![Issues](https://img.shields.io/github/issues/heruhendri/bot-backup-vps-script)
-![Version](https://img.shields.io/badge/version-3.1.0-blue)
+![License](https://img.shields.io/github/license/heruhendri/Installer-Backup-Vps-Bot-Telegram)
+![Stars](https://img.shields.io/github/stars/heruhendri/Installer-Backup-Vps-Bot-Telegram?style=social)
+![Forks](https://img.shields.io/github/forks/heruhendri/Installer-Backup-Vps-Bot-Telegram?style=social)
+![Issues](https://img.shields.io/github/issues/heruhendri/Installer-Backup-Vps-Bot-Telegram)
+![Version](https://img.shields.io/badge/version-4.0.0-green)
 
 ---
 
@@ -17,8 +17,11 @@ Script ini membuat sistem **backup otomatis VPS** dengan fitur lengkap:
 * Backup folder
 * Backup MySQL (multi-host, multi-user, multi-database)
 * Backup PostgreSQL
-* **Backup MongoDB (multi-account, multi-host, multi-database) — NEW**
-* Notifikasi Telegram (sendDocument)
+* Backup MongoDB (multi-account, multi-host, multi-database)
+* **Telegram Bot Controller** (Akses Menu via Tombol Inline) — **NEW**
+* **Real-time Progress** (Persentase penyalinan & kompresi) — **NEW**
+* **Security Whitelist** (Hanya username terdaftar yang bisa akses) — **NEW**
+* **Full & Selective Restore** (Restore folder tertentu saja) — **NEW**
 * systemd service + timer (OnCalendar)
 * Menu PRO untuk edit konfigurasi
 * Status real-time (auto refresh setiap 1 detik)
@@ -226,10 +229,11 @@ flowchart TD
 ```mermaid
 flowchart TD
     Start([Start]) --> Load[Load Config]
+    Load --> Auth{Username Allowed?}
+    Auth -- No --> Alert[Send Security Alert]
+    Auth -- Yes --> Tmp[Create Temp Dir]
 
-    Load --> Tmp[Create Temp Dir]
-
-    Tmp --> Copy[Copy Folders]
+    Tmp --> Copy[Copy Folders with Progress]
 
     Copy --> MySQL{Use MySQL?}
     MySQL -->|Yes| DumpMySQL[Dump MySQL]
@@ -270,14 +274,15 @@ flowchart TD
 | ----------------------------------------- | ----------------------- |
 | `/opt/auto-backup/config.conf`            | File konfigurasi utama  |
 | `/opt/auto-backup/backup-runner.sh`       | Script backup inti      |
+| `/opt/auto-backup/bot-control.sh`         | Service kontroler Bot Telegram |
 | `/opt/auto-backup/menu.sh`                | Menu PRO                |
 | `/usr/bin/menu-bot-backup`                | Symlink global          |
 | `/opt/auto-backup/backups/`               | Folder backup           |
 | `/etc/systemd/system/auto-backup.service` | Service backup          |
 | `/etc/systemd/system/auto-backup.timer`   | Timer OnCalendar        |
+| `/etc/systemd/system/auto-backup-bot.service` | Service Bot Telegram |
 | `install-backupvps-telegram.sh`           | Installer (auto delete) |
 
----
 
 # 📝 **PENJELASAN SCRIPT UTAMA**
 
@@ -406,7 +411,8 @@ find /opt/auto-backup/backups -type f -mtime +RETENTION_DAYS -delete
 # 🩹 **RESTORE BACKUP**
 
 * pilih file
-* preview isi
+* preview isi (list folder)
+* **Restore Selektif**: Pilih folder spesifik yang ingin di-restore.
 * extract temp
 * rsync ke root `/`
 * konfirmasi 2 tahap
@@ -425,4 +431,3 @@ Repo:
 # 📜 **LISENSI**
 
 MIT License.
-
