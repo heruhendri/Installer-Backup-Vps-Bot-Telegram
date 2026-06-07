@@ -50,6 +50,7 @@ if [[ "$UPDATE_CONFIG" == "y" ]]; then
     # ======================================================
     read -p "Masukkan TOKEN Bot Telegram: " BOT_TOKEN
     read -p "Masukkan CHAT_ID Telegram: " CHAT_ID
+    read -p "Masukkan Username Telegram yang diizinkan (comma separated, tanpa @, contoh: heru,hendri): " ALLOWED_USERNAMES
     read -p "Masukkan folder yang mau di-backup (comma separated, contoh: /etc,/var/www): " FOLDERS_RAW
     read -p "Backup SELURUH sistem VPS? (y/n): " USE_FULL_BACKUP
 
@@ -146,6 +147,7 @@ if [[ "$UPDATE_CONFIG" == "y" ]]; then
     cat > "$CONFIG_FILE" <<EOF
 BOT_TOKEN="$BOT_TOKEN"
 CHAT_ID="$CHAT_ID"
+ALLOWED_USERNAMES="$ALLOWED_USERNAMES"
 FOLDERS_RAW="$FOLDERS_RAW"
 USE_FULL_BACKUP="$USE_FULL_BACKUP"
 
@@ -170,6 +172,7 @@ else
     source "$CONFIG_FILE"
     # ensure defaults exist
     FOLDERS_RAW=${FOLDERS_RAW:-""}
+    ALLOWED_USERNAMES=${ALLOWED_USERNAMES:-""}
     USE_FULL_BACKUP=${USE_FULL_BACKUP:-n}
     MYSQL_MULTI_CONF=${MYSQL_MULTI_CONF:-""}
     MONGO_MULTI_CONF=${MONGO_MULTI_CONF:-""}
@@ -414,10 +417,11 @@ RUNNER="/opt/auto-backup/backup-runner.sh"
 OFFSET=0
 
 send_msg() {
-    local text="$1"
-    local reply_markup="$2"
+    local dest="$1"
+    local text="$2"
+    local reply_markup="$3"
     curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" \
-        -d "chat_id=$CHAT_ID" -d "text=$text" -d "reply_markup=$reply_markup"
+        -d "chat_id=$dest" -d "text=$text" -d "reply_markup=$reply_markup"
 }
 
 MAIN_MENU='{"inline_keyboard":[[{"text":"🚀 Backup Sekarang","callback_data":"do_backup"},{"text":"🔄 Restore","callback_data":"do_restore"}],[{"text":"📊 Status","callback_data":"do_status"}]]}'
@@ -428,11 +432,33 @@ while true; do
 
     for (( i=0; i<$NUM_UPDATES; i++ )); do
         OFFSET=$(echo "$UPDATES" | jq ".result[$i].update_id + 1")
+
+        # Validasi Username
+        USER_MSG=$(echo "$UPDATES" | jq -r ".result[$i].message.from.username // empty")
+        USER_CB=$(echo "$UPDATES" | jq -r ".result[$i].callback_query.from.username // empty")
+        ACTUAL_USER="${USER_MSG:-$USER_CB}"
+        SENDER_ID=$(echo "$UPDATES" | jq -r ".result[$i].message.from.id // .result[$i].callback_query.from.id")
+
+        if [[ -n "${ALLOWED_USERNAMES:-}" ]]; then
+            if [[ ! ",$ALLOWED_USERNAMES," =~ ",$ACTUAL_USER," ]]; then
+                # Kirim Alert Keamanan ke Admin (CHAT_ID)
+                send_msg "$CHAT_ID" "🚨 ALERT KEAMANAN! Percobaan akses bot dari user tak dikenal:
+Username: @$ACTUAL_USER
+User ID: $SENDER_ID" "{}"
+                
+                # Kirim pesan penolakan ke penyusup
+                if [[ -n "$USER_MSG" ]]; then
+                    send_msg "$SENDER_ID" "⚠️ Akses Ditolak! Anda (@$ACTUAL_USER) tidak memiliki izin untuk menggunakan bot ini." "{}"
+                fi
+                echo "[SECURITY] Percobaan akses ilegal dari @$ACTUAL_USER ($SENDER_ID)"
+                continue
+            fi
+        fi
         
         # Handle Command /start
         MSG_TEXT=$(echo "$UPDATES" | jq -r ".result[$i].message.text // empty")
         if [[ "$MSG_TEXT" == "/start" ]]; then
-            send_msg "Selamat Datang di VPS Backup Bot. Pilih aksi:" "$MAIN_MENU"
+            send_msg "$CHAT_ID" "Selamat Datang di VPS Backup Bot. Pilih aksi:" "$MAIN_MENU"
         fi
 
         # Handle Callback Query
@@ -440,16 +466,16 @@ while true; do
         if [[ -n "$CALLBACK_DATA" ]]; then
             case "$CALLBACK_DATA" in
                 do_backup)
-                    send_msg "Memulai proses backup..." "{}"
+                    send_msg "$CHAT_ID" "Memulai proses backup..." "{}"
                     bash "$RUNNER" &
                     ;;
                 do_status)
                     STATUS=$(systemctl is-active auto-backup.timer)
                     LAST=$(ls -t /opt/auto-backup/backups/ | head -n1)
-                    send_msg "Status Timer: $STATUS\nBackup Terakhir: $LAST" "$MAIN_MENU"
+                    send_msg "$CHAT_ID" "Status Timer: $STATUS\nBackup Terakhir: $LAST" "$MAIN_MENU"
                     ;;
                 do_restore)
-                    send_msg "Gunakan menu di terminal VPS (menu-bot-backup) untuk restorasi selektif demi keamanan." "$MAIN_MENU"
+                    send_msg "$CHAT_ID" "Gunakan menu di terminal VPS (menu-bot-backup) untuk restorasi selektif demi keamanan." "$MAIN_MENU"
                     ;;
             esac
         fi
@@ -547,6 +573,7 @@ source "$CONFIG"
 # Prevent unbound variable crash
 BOT_TOKEN="${BOT_TOKEN:-}"
 CHAT_ID="${CHAT_ID:-}"
+ALLOWED_USERNAMES="${ALLOWED_USERNAMES:-}"
 FOLDERS_RAW="${FOLDERS_RAW:-}"
 USE_FULL_BACKUP="${USE_FULL_BACKUP:-n}"
 USE_MYSQL="${USE_MYSQL:-n}"
@@ -562,6 +589,7 @@ save_config() {
     cat <<EOF > "$CONFIG"
 BOT_TOKEN="$BOT_TOKEN"
 CHAT_ID="$CHAT_ID"
+ALLOWED_USERNAMES="$ALLOWED_USERNAMES"
 FOLDERS_RAW="$FOLDERS_RAW"
 USE_FULL_BACKUP="$USE_FULL_BACKUP"
 
@@ -584,6 +612,7 @@ reload_systemd() {
     systemctl daemon-reload
     systemctl restart auto-backup.timer 2>/dev/null || true
     systemctl restart auto-backup.service 2>/dev/null || true
+    systemctl restart auto-backup-bot.service 2>/dev/null || true
     echo "[$(date '+%F %T')] Systemd reloaded & services restarted." >> "$LOGFILE"
 }
 
@@ -1371,6 +1400,7 @@ echo -e "${BLUE}[23] Status Realtime (live monitor)${RESET}"
 echo -e "${BLUE}[24] Gunakan MySQL (use_mysql)${RESET}"
 echo -e "${BLUE}[25] Gunakan MongoDB (use_mongo)${RESET}"
 echo -e "${BLUE}[26] Gunakan PostgreSQL (use_pg)${RESET}"
+echo -e "${YELLOW}[27] Edit Allowed Usernames${RESET}"
 echo -e "${RED}[0]  Keluar (tanpa simpan)${RESET}"
 
 echo ""
@@ -1405,6 +1435,7 @@ echo -e "${BLUE}============================================================${RE
         24) toggle_mysql ;;
         25) toggle_mongo ;;
         26) toggle_pg ;;
+        27) read -p "Masukkan daftar Username yang diizinkan (comma separated, tanpa @): " ALLOWED_USERNAMES; echo "[OK] Updated. Ingat untuk Simpan Config & Restart Service."; pause ;;
         0) echo "Keluar tanpa menyimpan." ; break ;;
         *) echo "Pilihan tidak valid." ; sleep 1 ;;
     esac
