@@ -2,13 +2,25 @@
 set -e
 clear
 
-WATERMARK_INSTALL="=== AUTO BACKUP VPS — INSTALLER ===
-Version: 5.0.0 | Created by: HENDRI
-Telegram: https://t.me/GbtTapiPngnSndiri
-========================================="
-WATERMARK_END="=== INSTALL COMPLETE — SCRIPT BY HENDRI ===
-Support: https://t.me/GbtTapiPngnSndiri
-========================================="
+# Color Definitions
+RED='\e[1;31m'
+GREEN='\e[1;32m'
+YELLOW='\e[1;33m'
+BLUE='\e[1;34m'
+MAGENTA='\e[1;35m'
+CYAN='\e[1;36m'
+WHITE='\e[1;37m'
+BOLD='\e[1m'
+RESET='\e[0m'
+
+WATERMARK_INSTALL="${CYAN}${BOLD}=======================================================
+   🛡️  ${WHITE}AUTO BACKUP VPS — INSTALLER v5.0.0${CYAN}  🛡️
+           ${YELLOW}Created by: HENDRI (World Class)
+=======================================================${RESET}"
+
+WATERMARK_END="${GREEN}${BOLD}=======================================================
+   ✅  ${WHITE}INSTALL SELESAI — SCRIPT BY HENDRI${GREEN}  ✅
+=======================================================${RESET}"
 
 echo "$WATERMARK_INSTALL"
 echo ""
@@ -620,6 +632,17 @@ cat > "$MENU_FILE" <<'MENU_FINAL_EOF'
 #!/bin/bash
 set -uo pipefail
 
+# Color Definitions
+RED='\e[1;31m'
+GREEN='\e[1;32m'
+YELLOW='\e[1;33m'
+BLUE='\e[1;34m'
+MAGENTA='\e[1;35m'
+CYAN='\e[1;36m'
+WHITE='\e[1;37m'
+BOLD='\e[1m'
+RESET='\e[0m'
+
 CONFIG="/opt/auto-backup/config.conf"
 [[ -f "$CONFIG" ]] && source "$CONFIG" || { echo "Config not found"; exit 1; }
 
@@ -629,13 +652,12 @@ SERVICE_FILE="/etc/systemd/system/auto-backup.service"
 TIMER_FILE="/etc/systemd/system/auto-backup.timer"
 LOGFILE="$INSTALL_DIR/menu-pro.log"
 
-WATERMARK_HEADER="=== AUTO BACKUP VPS by HENDRI — MENU PRO ===
-SCRIPT BY: HENDRI
-SUPPORT: https://t.me/GbtTapiPngnSndiri
-========================================"
-WATERMARK_FOOTER="========================================
-SCRIPT BY: HENDRI — AUTO BACKUP VPS
-Support: https://t.me/GbtTapiPngnSndiri"
+WATERMARK_HEADER="${MAGENTA}${BOLD}=======================================================
+   🛡️  ${WHITE}AUTO BACKUP VPS — MENU PRO${MAGENTA}  🛡️
+           ${YELLOW}Created by: HENDRI
+=======================================================${RESET}"
+
+WATERMARK_FOOTER="${MAGENTA}${BOLD}=======================================================${RESET}"
 
 if [[ ! -f "$CONFIG" ]]; then
     echo "Config tidak ditemukan di $CONFIG. Jalankan installer terlebih dahulu." | tee -a "$LOGFILE"
@@ -955,20 +977,24 @@ main_menu_new() {
         STATUS_SERVICE=$(systemctl is-active auto-backup.service || echo "INACTIVE")
         TOTAL_BACKUP=$(ls /opt/auto-backup/backups/*.tar.gz 2>/dev/null | wc -l)
         clear
-        echo -e "${CYAN}========== BACKUP DASHBOARD BY HENDRI ==========${RESET}"
-        echo -e " Status  : ${GREEN}${STATUS_SERVICE}${RESET} | Total: ${BLUE}${TOTAL_BACKUP}${RESET}"
-        echo "------------------------------------------------------------"
-        echo -e "[1] 🤖 Bot & Access Control"
-        echo -e "[2] 📂 Backup Scope & Folders (Checkbox)"
-        echo -e "[3] 🗄️ Database Configurations"
-        echo -e "[4] ⏰ Schedule & Time Settings"
-        echo -e "[5] 🚀 Backup & Restore Operations"
-        echo -e "------------------------------------------------------------"
-        echo -e "[6] 📊 Live Monitor"
-        echo -e "[7] 🛠️ Repair/Update System"
-        echo -e "[0] Keluar"
-        echo -e "${BLUE}============================================================${RESET}"
-        read -p "Pilih Kategori: " MAIN_OPT
+        echo -e "$WATERMARK_HEADER"
+        echo -e "  ${BOLD}${WHITE}STATUS DASHBOARD:${RESET}"
+        echo -e "  ${WHITE}Status Service : $( [[ "$STATUS_SERVICE" == "active" ]] && echo -e "${GREEN}${STATUS_SERVICE}" || echo -e "${RED}${STATUS_SERVICE}" )${RESET}"
+        echo -e "  ${WHITE}Total Backup   : ${CYAN}${TOTAL_BACKUP} files${RESET}"
+        echo -e "${MAGENTA}-------------------------------------------------------${RESET}"
+        echo -e "  ${YELLOW}[1]${RESET} 🤖  ${BOLD}Bot & Access Control${RESET}"
+        echo -e "  ${YELLOW}[2]${RESET} 📂  ${BOLD}Backup Scope & Folders${RESET}"
+        echo -e "  ${YELLOW}[3]${RESET} 🗄️  ${BOLD}Database Configurations${RESET}"
+        echo -e "  ${YELLOW}[4]${RESET} ⏰  ${BOLD}Schedule & Time Settings${RESET}"
+        echo -e "  ${YELLOW}[5]${RESET} 🚀  ${BOLD}Backup & Restore Operations${RESET}"
+        echo -e "${MAGENTA}-------------------------------------------------------${RESET}"
+        echo -e "  ${CYAN}[6]${RESET} 📊  ${BOLD}Live Monitor Status${RESET}"
+        echo -e "  ${CYAN}[7]${RESET} 🛠️  ${BOLD}Repair/Update System${RESET}"
+        echo -e "  ${RED}[0]${RESET} 🚪  ${BOLD}Keluar / Exit${RESET}"
+        echo -e "$WATERMARK_FOOTER"
+        echo ""
+        echo -ne "  ${BOLD}${WHITE}Pilih Kategori [0-7]: ${RESET}"
+        read MAIN_OPT
         case "$MAIN_OPT" in
             1) menu_bot_security ;;
             2) menu_scope_checkbox ;;
