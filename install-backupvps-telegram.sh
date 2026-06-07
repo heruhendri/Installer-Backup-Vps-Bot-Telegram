@@ -1234,6 +1234,18 @@ test_backup() {
     echo "Selesai. Periksa Telegram / $INSTALL_DIR/backups"
 }
 
+update_script() {
+    REPO_URL="https://raw.githubusercontent.com/heruhendri/Installer-Backup-Vps-Bot-Telegram/master/install-backupvps-telegram.sh"
+    if confirm "Apakah Anda yakin ingin memperbarui script ke versi terbaru?"; then
+        echo "[INFO] Mendownload script terbaru dari GitHub..."
+        curl -sL "$REPO_URL" -o /tmp/update-backup.sh
+        chmod +x /tmp/update-backup.sh
+        echo "[INFO] Menjalankan update sekarang..."
+        bash /tmp/update-backup.sh
+        exit 0
+    fi
+}
+
 toggle_mysql() {
     echo "Status sekarang USE_MYSQL = $USE_MYSQL"
     read -p "Aktifkan MySQL? (y/n): " jawab
@@ -1401,6 +1413,7 @@ echo -e "${BLUE}[24] Gunakan MySQL (use_mysql)${RESET}"
 echo -e "${BLUE}[25] Gunakan MongoDB (use_mongo)${RESET}"
 echo -e "${BLUE}[26] Gunakan PostgreSQL (use_pg)${RESET}"
 echo -e "${YELLOW}[27] Edit Allowed Usernames${RESET}"
+echo -e "${CYAN}[28] Update Script Terbaru${RESET}"
 echo -e "${RED}[0]  Keluar (tanpa simpan)${RESET}"
 
 echo ""
@@ -1436,6 +1449,7 @@ echo -e "${BLUE}============================================================${RE
         25) toggle_mongo ;;
         26) toggle_pg ;;
         27) read -p "Masukkan daftar Username yang diizinkan (comma separated, tanpa @): " ALLOWED_USERNAMES; echo "[OK] Updated. Ingat untuk Simpan Config & Restart Service."; pause ;;
+        28) update_script ;;
         0) echo "Keluar tanpa menyimpan." ; break ;;
         *) echo "Pilihan tidak valid." ; sleep 1 ;;
     esac
