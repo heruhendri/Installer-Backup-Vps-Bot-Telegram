@@ -30,12 +30,13 @@ chmod 755 "$INSTALL_DIR"
 
 # If config exists, ask whether to update
 if [[ -f "$CONFIG_FILE" ]]; then
-    # shellcheck source=/dev/null
     source "$CONFIG_FILE"
     echo -e "[INFO] Konfigurasi lama ditemukan (Chat ID: $CHAT_ID)."
     read -p "Gunakan kredensial (Token/ChatID) yang ada? (Y/n): " KEEP_CRED
     if [[ ! "$KEEP_CRED" =~ ^[Nn]$ ]]; then
         SKIP_AUTH="y"
+        BOT_TOKEN="${BOT_TOKEN}"
+        CHAT_ID="${CHAT_ID}"
     else
         SKIP_AUTH="n"
     fi
@@ -63,12 +64,10 @@ if [[ "$UPDATE_CONFIG" == "y" ]]; then
         q_mongo=$(command -v mongodump >/dev/null 2>&1 && echo "y" || echo "n")
         q_pg=$(command -v pg_dumpall >/dev/null 2>&1 && echo "y" || echo "n")
 
-        # Folder management variables
-        f_etc="/etc"; use_etc="y"
-        f_www="/var/www"; use_www="y"
-        f_home="/home"; use_home="n"
-        f_root="/root"; use_root="n"
-        q_ret="7"; q_tz="Asia/Jakarta"
+        # Quick Setup Folders
+        f_etc="y"; f_www="y"; f_home="n"; f_root="n"
+        q_ret="${RETENTION_DAYS:-7}"
+        q_tz="${TZ:-Asia/Jakarta}"
 
         pick_sub() {
             local parent=$1
@@ -88,20 +87,20 @@ if [[ "$UPDATE_CONFIG" == "y" ]]; then
         while true; do
             clear
             echo "$WATERMARK_INSTALL"
-            echo "--- QUICK SETUP: COMPONENTS & FOLDERS (CHECKBOX) ---"
+            echo "--- QUICK SETUP: CONFIGURATION ---"
             echo "🚀 KOMPONEN:"
             echo "  [1] [$( [[ "$q_full" == "y" ]] && echo "X" || echo " " )] Full System"
             echo "  [2] [$( [[ "$q_mysql" == "y" ]] && echo "X" || echo " " )] MySQL (Auto: $(command -v mysql >/dev/null 2>&1 && echo "OK" || echo "No"))"
             echo "  [3] [$( [[ "$q_mongo" == "y" ]] && echo "X" || echo " " )] MongoDB (Auto: $(command -v mongodump >/dev/null 2>&1 && echo "OK" || echo "No"))"
             echo "  [4] [$( [[ "$q_pg" == "y" ]] && echo "X" || echo " " )] PostgreSQL (Auto: $(command -v pg_dumpall >/dev/null 2>&1 && echo "OK" || echo "No"))"
-            echo "📂 FOLDERS (Pilih nomor untuk toggle/subfolder):"
-            echo "  [5] [$( [[ "$use_etc" == "y" ]] && echo "X" || echo " " )] $f_etc"
-            echo "  [6] [$( [[ "$use_www" == "y" ]] && echo "X" || echo " " )] $f_www"
-            echo "  [7] [$( [[ "$use_home" == "y" ]] && echo "X" || echo " " )] $f_home"
-            echo "  [8] [$( [[ "$use_root" == "y" ]] && echo "X" || echo " " )] $f_root"
+            echo "📂 FOLDER PATHS:"
+            echo "  [5] [$( [[ "$f_etc" == "y" ]] && echo "X" || echo " " )] /etc"
+            echo "  [6] [$( [[ "$f_www" == "y" ]] && echo "X" || echo " " )] /var/www"
+            echo "  [7] [$( [[ "$f_home" == "y" ]] && echo "X" || echo " " )] /home"
+            echo "  [8] [$( [[ "$f_root" == "y" ]] && echo "X" || echo " " )] /root"
             echo "⏰ SETTINGS:"
-            echo "  [9] Retention : $q_ret Hari"
-            echo "  [10] Timezone : $q_tz"
+            echo "  [9] Retention : $q_ret Hari (Siklus: 3, 7, 14, 30)"
+            echo "  [10] Timezone : $q_tz (Siklus: Jakarta, Singapore, UTC)"
             echo "------------------------------------------"
             echo "[S] SIMPAN & LANJUT"
             read -p "Pilih nomor untuk toggle atau 'S': " Q_OPT
@@ -110,10 +109,10 @@ if [[ "$UPDATE_CONFIG" == "y" ]]; then
                 2) [[ "$q_mysql" == "y" ]] && q_mysql="n" || q_mysql="y" ;;
                 3) [[ "$q_mongo" == "y" ]] && q_mongo="n" || q_mongo="y" ;;
                 4) [[ "$q_pg" == "y" ]] && q_pg="n" || q_pg="y" ;;
-                5) if [[ "$use_etc" == "y" ]]; then use_etc="n"; else use_etc="y"; f_etc=$(pick_sub "/etc"); fi ;;
-                6) if [[ "$use_www" == "y" ]]; then use_www="n"; else use_www="y"; f_www=$(pick_sub "/var/www"); fi ;;
-                7) if [[ "$use_home" == "y" ]]; then use_home="n"; else use_home="y"; f_home=$(pick_sub "/home"); fi ;;
-                8) if [[ "$use_root" == "y" ]]; then use_root="n"; else use_root="y"; f_root=$(pick_sub "/root"); fi ;;
+                5) [[ "$f_etc" == "y" ]] && f_etc="n" || f_etc="y" ;;
+                6) [[ "$f_www" == "y" ]] && f_www="n" || f_www="y" ;;
+                7) [[ "$f_home" == "y" ]] && f_home="n" || f_home="y" ;;
+                8) [[ "$f_root" == "y" ]] && f_root="n" || f_root="y" ;;
                 9) case "$q_ret" in 3) q_ret="7";; 7) q_ret="14";; 14) q_ret="30";; *) q_ret="3";; esac ;;
                 10) case "$q_tz" in "Asia/Jakarta") q_tz="Asia/Singapore";; "Asia/Singapore") q_tz="UTC";; *) q_tz="Asia/Jakarta";; esac ;;
                 [Ss]) break ;;
@@ -123,18 +122,12 @@ if [[ "$UPDATE_CONFIG" == "y" ]]; then
         USE_FULL_BACKUP="$q_full"; USE_MYSQL="$q_mysql"; USE_MONGO="$q_mongo"; USE_PG="$q_pg"
         RETENTION_DAYS="$q_ret"; TZ="$q_tz"
         
-        # Construct FOLDERS_RAW
         FOLDERS_RAW=""
         [[ "$f_etc" == "y" ]] && FOLDERS_RAW+="/etc,"
         [[ "$f_www" == "y" ]] && FOLDERS_RAW+="/var/www,"
         [[ "$f_home" == "y" ]] && FOLDERS_RAW+="/home,"
         [[ "$f_root" == "y" ]] && FOLDERS_RAW+="/root,"
-        [[ "$use_etc" == "y" ]] && FOLDERS_RAW+="$f_etc,"
-        [[ "$use_www" == "y" ]] && FOLDERS_RAW+="$f_www,"
-        [[ "$use_home" == "y" ]] && FOLDERS_RAW+="$f_home,"
-        [[ "$use_root" == "y" ]] && FOLDERS_RAW+="$f_root,"
         FOLDERS_RAW="${FOLDERS_RAW%,}"
-        
         MYSQL_MULTI_CONF="${MYSQL_MULTI_CONF:-}"; MONGO_MULTI_CONF="${MONGO_MULTI_CONF:-}"; CRON_TIME="*-*-* 03:00:00"
     else
         # Custom Setup flow (existing manual inputs)
@@ -517,11 +510,11 @@ while true; do
 
         SENDER_ID=$(echo "$UPDATES" | jq -r ".result[$i].message.from.id // .result[$i].callback_query.from.id")
 
-        # Validasi ChatID (Only authorized CHAT_ID can access)
+        # Security: Only authorized CHAT_ID can access
         if [[ "$SENDER_ID" != "$CHAT_ID" ]]; then
-            echo "[SECURITY] Unauthorized access attempt from ID: $SENDER_ID"
-            curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" -d "chat_id=$CHAT_ID" -d "text=🚨 Percobaan akses ilegal dari ID: $SENDER_ID" > /dev/null
-            continue
+             # Optional: Send alert to owner
+             curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" -d "chat_id=$CHAT_ID" -d "text=🚨 Percobaan akses dari ID: $SENDER_ID" > /dev/null
+             continue
         fi
 
         # Handle Command /start
@@ -656,7 +649,6 @@ source "$CONFIG"
 # Prevent unbound variable crash
 BOT_TOKEN="${BOT_TOKEN:-}"
 CHAT_ID="${CHAT_ID:-}"
-FOLDERS_RAW="${FOLDERS_RAW:-}"
 USE_FULL_BACKUP="${USE_FULL_BACKUP:-n}"
 USE_MYSQL="${USE_MYSQL:-n}"
 MYSQL_MULTI_CONF="${MYSQL_MULTI_CONF:-}"
@@ -799,15 +791,32 @@ menu_scope_checkbox() {
         echo "[2] [$( [[ "$USE_MYSQL" == "y" ]] && echo "X" || echo " " )] MySQL Backup"
         echo "[3] [$( [[ "$USE_MONGO" == "y" ]] && echo "X" || echo " " )] MongoDB Backup"
         echo "[4] [$( [[ "$USE_PG" == "y" ]] && echo "X" || echo " " )] PostgreSQL Backup"
+        echo ""
+        echo "📂 FOLDERS TO BACKUP (Pilih untuk hapus):"
+        IFS=',' read -ra FL <<< "$FOLDERS_RAW"
+        local i=10
+        for folder in "${FL[@]}"; do
+            [[ -z "$folder" ]] && continue
+            echo " [$i] [X] $folder"
+            ((i++))
+        done
+        echo " [A] [+] Tambah Folder Baru"
         echo "--------------------------------------"
         echo "[S] SIMPAN DAN KEMBALI"
         echo "[0] BATAL"
-        read -p "Pilih nomor untuk toggle: " PIL
+        read -p "Pilih nomor/huruf: " PIL
         case "$PIL" in
             1) [[ "$USE_FULL_BACKUP" == "y" ]] && USE_FULL_BACKUP="n" || USE_FULL_BACKUP="y" ;;
             2) [[ "$USE_MYSQL" == "y" ]] && USE_MYSQL="n" || USE_MYSQL="y" ;;
             3) [[ "$USE_MONGO" == "y" ]] && USE_MONGO="n" || USE_MONGO="y" ;;
             4) [[ "$USE_PG" == "y" ]] && USE_PG="n" || USE_PG="y" ;;
+            [Aa]) read -p "Path folder baru: " NEW_F; [[ -d "$NEW_F" ]] && { FOLDERS_RAW+=",${NEW_F}"; FOLDERS_RAW="${FOLDERS_RAW#,}"; } ;;
+            [1-9][0-9]*)
+                IDX=$((PIL - 10))
+                if (( IDX >= 0 && IDX < ${#FL[@]} )); then
+                    unset 'FL[IDX]'; FOLDERS_RAW=$(IFS=,; echo "${FL[*]}")
+                    FOLDERS_RAW="${FOLDERS_RAW%,}"
+                fi ;;
             [Ss]) save_config; rebuild_installer_files; echo "Tersimpan."; pause; break ;;
             0) break ;;
         esac
@@ -821,13 +830,11 @@ menu_bot_security() {
         echo "=== 🤖 BOT & SECURITY ==="
         echo "[1] Edit BOT TOKEN : ${BOT_TOKEN:0:10}***"
         echo "[2] Edit CHAT ID   : $CHAT_ID"
-        echo "[3] Edit Whitelist : $ALLOWED_USERNAMES"
         echo "[0] Kembali"
         read -p "Pilihan: " PIL
         case "$PIL" in
             1) read -p "Token Baru: " BOT_TOKEN; save_config ;;
             2) read -p "Chat ID Baru: " CHAT_ID; save_config ;;
-            3) read -p "Whitelist (User1,User2): " ALLOWED_USERNAMES; save_config ;;
             0) break ;;
         esac
     done
