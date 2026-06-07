@@ -31,26 +31,34 @@ chmod 755 "$INSTALL_DIR"
 # If config exists, ask whether to update
 if [[ -f "$CONFIG_FILE" ]]; then
     source "$CONFIG_FILE"
-    echo -e "[INFO] Konfigurasi ditemukan untuk Chat ID: ${CHAT_ID:-}"
-    read -p "Update konfigurasi? (y/N): " RESP_UPD
-    [[ "$RESP_UPD" =~ ^[Yy]$ ]] && UPDATE_CONFIG="y" || UPDATE_CONFIG="n"
+    echo -e "[INFO] Konfigurasi lama ditemukan (Chat ID: $CHAT_ID)."
+    read -p "Gunakan kredensial (Token/ChatID) yang ada? (Y/n): " KEEP_CRED
+    if [[ ! "$KEEP_CRED" =~ ^[Nn]$ ]]; then
+        SKIP_AUTH="y"
+        UPDATE_CONFIG="y"
+    else
+        SKIP_AUTH="n"
+        UPDATE_CONFIG="y"
+    fi
 else
     UPDATE_CONFIG="y"
+    SKIP_AUTH="n"
 fi
 
 if [[ "$UPDATE_CONFIG" == "y" ]]; then
+    if [[ "$SKIP_AUTH" == "n" ]]; then
+        read -p "Masukkan TOKEN Bot Telegram: " BOT_TOKEN
+        read -p "Masukkan CHAT_ID Telegram: " CHAT_ID
+    fi
+
     echo -e "\n--- MODE INSTALASI ---"
     echo "1) Quick Setup (Checkbox & Auto-detect DB)"
     echo "2) Custom Setup (Manual Detail)"
     read -p "Pilih mode (1/2): " SETUP_MODE
 
-    read -p "Masukkan TOKEN Bot Telegram: " BOT_TOKEN
-    read -p "Masukkan CHAT_ID Telegram: " CHAT_ID
-    read -p "Masukkan Username Telegram (Whitelist, tanpa @): " ALLOWED_USERNAMES
-
     if [[ "$SETUP_MODE" == "1" ]]; then
         # Quick Setup logic with Checkbox-style selection
-        q_full="n"
+        q_full="y"
         q_mysql=$(command -v mysql >/dev/null 2>&1 && echo "y" || echo "n")
         q_mongo=$(command -v mongodump >/dev/null 2>&1 && echo "y" || echo "n")
         q_pg=$(command -v pg_dumpall >/dev/null 2>&1 && echo "y" || echo "n")
@@ -58,7 +66,7 @@ if [[ "$UPDATE_CONFIG" == "y" ]]; then
         # Quick Folder paths
         f_etc="y"; f_www="y"; f_home="n"; f_root="n"
         # Quick Retention & TZ
-        q_ret="7"
+        q_ret="${RETENTION_DAYS:-7}"
         q_tz="Asia/Jakarta"
 
         while true; do
@@ -107,7 +115,7 @@ if [[ "$UPDATE_CONFIG" == "y" ]]; then
         [[ "$f_root" == "y" ]] && FOLDERS_RAW+="/root,"
         FOLDERS_RAW="${FOLDERS_RAW%,}"
         
-        MYSQL_MULTI_CONF=""; MONGO_MULTI_CONF=""; CRON_TIME="*-*-* 03:00:00"
+        MYSQL_MULTI_CONF="${MYSQL_MULTI_CONF:-}"; MONGO_MULTI_CONF="${MONGO_MULTI_CONF:-}"; CRON_TIME="*-*-* 03:00:00"
     else
         # Custom Setup flow (existing manual inputs)
         read -p "Masukkan folder backup (comma separated): " FOLDERS_RAW
@@ -128,7 +136,6 @@ if [[ "$UPDATE_CONFIG" == "y" ]]; then
     cat > "$CONFIG_FILE" <<CONFIG
 BOT_TOKEN="$BOT_TOKEN"
 CHAT_ID="$CHAT_ID"
-ALLOWED_USERNAMES="$ALLOWED_USERNAMES"
 FOLDERS_RAW="$FOLDERS_RAW"
 USE_FULL_BACKUP="$USE_FULL_BACKUP"
 USE_MYSQL="$USE_MYSQL"
@@ -401,10 +408,8 @@ cat > "$BOT_CONTROL" <<'BTC'
 CONFIG_FILE="/opt/auto-backup/config.conf"
 RUNNER="/opt/auto-backup/backup-runner.sh"
 OFFSET=0
-STATE_FILE="/tmp/bot_state"
 
 send_or_edit() {
-    # Refresh config to get latest ALLOWED_USERNAMES
     source "$CONFIG_FILE"
     local dest="$1"
     local text="$2"
@@ -437,27 +442,6 @@ get_sel_menu() {
         '[{"text":"🚀 MULAI BACKUP","callback_data":"tg_run_'"$s"'"}]]}'
 }
 
-get_access_menu() {
-    source "$CONFIG_FILE"
-    local kb='{"inline_keyboard":[['
-    kb+='{"text":"➕ Tambah User","callback_data":"adm_add_start"},'
-    kb+='{"text":"❌ Hapus User","callback_data":"adm_del_list"}],'
-    kb+='[{"text":"⬅️ Kembali","callback_data":"back_main"}]]}'
-    echo "$kb"
-}
-
-get_del_user_menu() {
-    source "$CONFIG_FILE"
-    local kb='{"inline_keyboard":['
-    IFS=',' read -ra ADDR <<< "$ALLOWED_USERNAMES"
-    for u in "${ADDR[@]}"; do
-        [[ -z "$u" ]] && continue
-        kb+='[{"text":"🗑 @'$u'","callback_data":"adm_rmv_'$u'"}],'
-    done
-    kb+='[{"text":"⬅️ Batal","callback_data":"manage_access"}]]}'
-    echo "$kb"
-}
-
 toggle_bit() {
     local bit="$1"
     local str="$2"
@@ -478,7 +462,6 @@ map_to_args() {
 }
 
 MAIN_MENU='{"inline_keyboard":[[{"text":"🚀 Backup Sekarang","callback_data":"do_backup"},{"text":"🔄 Restore","callback_data":"do_restore"}],[{"text":"📊 Status","callback_data":"do_status"}]]}'
-ADMIN_ADD_BTN='[{"text":"⚙️ Kelola Akses","callback_data":"manage_access"}]'
 
 while true; do
     source "$CONFIG_FILE"
@@ -488,58 +471,19 @@ while true; do
     for (( i=0; i<$NUM_UPDATES; i++ )); do
         OFFSET=$(echo "$UPDATES" | jq ".result[$i].update_id + 1")
 
-        # Validasi Username
-        USER_MSG=$(echo "$UPDATES" | jq -r ".result[$i].message.from.username // empty")
-        USER_CB=$(echo "$UPDATES" | jq -r ".result[$i].callback_query.from.username // empty")
-        ACTUAL_USER="${USER_MSG:-$USER_CB}"
         SENDER_ID=$(echo "$UPDATES" | jq -r ".result[$i].message.from.id // .result[$i].callback_query.from.id")
 
-        if [[ -n "${ALLOWED_USERNAMES:-}" ]]; then
-            if [[ ! ",$ALLOWED_USERNAMES," =~ ",$ACTUAL_USER," ]]; then
-                # Kirim Alert Keamanan ke Admin (CHAT_ID)
-                send_or_edit "$CHAT_ID" "🚨 ALERT KEAMANAN! Percobaan akses bot dari user tak dikenal:
-Username: @$ACTUAL_USER
-User ID: $SENDER_ID" "{}"
-                
-                # Kirim pesan penolakan ke penyusup
-                if [[ -n "$USER_MSG" ]]; then
-                    send_or_edit "$SENDER_ID" "⚠️ Akses Ditolak! Anda (@$ACTUAL_USER) tidak memiliki izin untuk menggunakan bot ini." "{}"
-                fi
-                echo "[SECURITY] Percobaan akses ilegal dari @$ACTUAL_USER ($SENDER_ID)"
-                continue
-            fi
-        fi
-        
-        # Handle Input Text (For Adding User)
-        if [[ -f "$STATE_FILE" ]] && [[ -n "$USER_MSG" ]]; then
-            STATE=$(cat "$STATE_FILE")
-            if [[ "$STATE" == "WAIT_ADD_USER" ]]; then
-                NEW_U=$(echo "$USER_MSG" | sed 's/@//g' | tr -d '[:space:]')
-                if [[ -n "$NEW_U" ]]; then
-                    if [[ ",$ALLOWED_USERNAMES," == *",$NEW_U,"* ]]; then
-                        send_or_edit "$SENDER_ID" "User @$NEW_U sudah ada dalam daftar." "{}"
-                    else
-                        NEW_LIST="${ALLOWED_USERNAMES:-}"
-                        [[ -n "$NEW_LIST" ]] && NEW_LIST+=","
-                        NEW_LIST+="$NEW_U"
-                        sed -i "s|^ALLOWED_USERNAMES=.*|ALLOWED_USERNAMES=\"$NEW_LIST\"|" "$CONFIG_FILE"
-                        send_or_edit "$SENDER_ID" "✅ Berhasil menambah @$NEW_U ke whitelist." "$(get_access_menu)"
-                    fi
-                fi
-                rm -f "$STATE_FILE"
-                continue
-            fi
+        # Validasi ChatID (Only authorized CHAT_ID can access)
+        if [[ "$SENDER_ID" != "$CHAT_ID" ]]; then
+            echo "[SECURITY] Unauthorized access attempt from ID: $SENDER_ID"
+            curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" -d "chat_id=$CHAT_ID" -d "text=🚨 Percobaan akses ilegal dari ID: $SENDER_ID" > /dev/null
+            continue
         fi
 
         # Handle Command /start
         MSG_TEXT=$(echo "$UPDATES" | jq -r ".result[$i].message.text // empty")
         if [[ "$MSG_TEXT" == "/start" ]]; then
-            MENU_FINAL="$MAIN_MENU"
-            if [[ "$SENDER_ID" == "$CHAT_ID" ]]; then
-                # Tambahkan tombol admin jika sender adalah admin utama
-                MENU_FINAL=$(echo "$MAIN_MENU" | jq ".inline_keyboard += [$ADMIN_ADD_BTN]")
-            fi
-            send_or_edit "$SENDER_ID" "Selamat Datang di VPS Backup Bot. Pilih aksi:" "$MENU_FINAL"
+            send_or_edit "$SENDER_ID" "Selamat Datang di VPS Backup Bot. Pilih aksi:" "$MAIN_MENU"
         fi
 
         # Handle Callback Query
@@ -548,10 +492,6 @@ User ID: $SENDER_ID" "{}"
 
         if [[ -n "$CALLBACK_DATA" ]]; then
             case "$CALLBACK_DATA" in
-                back_main)
-                    MENU_FINAL=$(echo "$MAIN_MENU" | jq ".inline_keyboard += [$ADMIN_ADD_BTN]")
-                    send_or_edit "$CHAT_ID" "Selamat Datang di VPS Backup Bot. Pilih aksi:" "$MENU_FINAL" "$CB_MSG_ID"
-                    ;;
                 do_backup)
                     MENU_SEL=$(get_sel_menu "11111")
                     send_or_edit "$SENDER_ID" "Pilih item yang ingin di-backup:" "$MENU_SEL" "$CB_MSG_ID"
@@ -575,25 +515,6 @@ User ID: $SENDER_ID" "{}"
                     ;;
                 do_restore)
                     send_or_edit "$SENDER_ID" "Gunakan menu di terminal VPS (menu-bot-backup) untuk restorasi selektif demi keamanan." "$MAIN_MENU" "$CB_MSG_ID"
-                    ;;
-                manage_access)
-                    if [[ "$SENDER_ID" == "$CHAT_ID" ]]; then
-                        send_or_edit "$CHAT_ID" "⚙️ Menu Kelola Akses Whitelist:" "$(get_access_menu)" "$CB_MSG_ID"
-                    fi
-                    ;;
-                adm_add_start)
-                    echo "WAIT_ADD_USER" > "$STATE_FILE"
-                    send_or_edit "$CHAT_ID" "Kirimkan Username Telegram yang ingin diberi akses (Tanpa @):" '{"inline_keyboard":[[{"text":"❌ Batal","callback_data":"manage_access"}]]}' "$CB_MSG_ID"
-                    ;;
-                adm_del_list)
-                    send_or_edit "$CHAT_ID" "Klik username di bawah untuk menghapus akses:" "$(get_del_user_menu)" "$CB_MSG_ID"
-                    ;;
-                adm_rmv_*)
-                    TARGET_U=$(echo "$CALLBACK_DATA" | sed 's/adm_rmv_//')
-                    # Remove from list
-                    NEW_LIST=$(echo ",$ALLOWED_USERNAMES," | sed "s/,$TARGET_U,/,/g" | sed 's/^,//;s/,$//')
-                    sed -i "s|^ALLOWED_USERNAMES=.*|ALLOWED_USERNAMES=\"$NEW_LIST\"|" "$CONFIG_FILE"
-                    send_or_edit "$CHAT_ID" "✅ Akses @$TARGET_U telah dicabut." "$(get_del_user_menu)" "$CB_MSG_ID"
                     ;;
             esac
         fi
@@ -690,7 +611,6 @@ source "$CONFIG"
 # Prevent unbound variable crash
 BOT_TOKEN="${BOT_TOKEN:-}"
 CHAT_ID="${CHAT_ID:-}"
-ALLOWED_USERNAMES="${ALLOWED_USERNAMES:-}"
 FOLDERS_RAW="${FOLDERS_RAW:-}"
 USE_FULL_BACKUP="${USE_FULL_BACKUP:-n}"
 USE_MYSQL="${USE_MYSQL:-n}"
@@ -706,7 +626,6 @@ save_config() {
     cat <<EOF > "$CONFIG"
 BOT_TOKEN="$BOT_TOKEN"
 CHAT_ID="$CHAT_ID"
-ALLOWED_USERNAMES="$ALLOWED_USERNAMES"
 FOLDERS_RAW="$FOLDERS_RAW"
 USE_FULL_BACKUP="$USE_FULL_BACKUP"
 
@@ -857,13 +776,11 @@ menu_bot_security() {
         echo "=== 🤖 BOT & SECURITY ==="
         echo "[1] Edit BOT TOKEN : ${BOT_TOKEN:0:10}***"
         echo "[2] Edit CHAT ID   : $CHAT_ID"
-        echo "[3] Edit Whitelist : $ALLOWED_USERNAMES"
         echo "[0] Kembali"
         read -p "Pilihan: " PIL
         case "$PIL" in
             1) read -p "Token Baru: " BOT_TOKEN; save_config ;;
             2) read -p "Chat ID Baru: " CHAT_ID; save_config ;;
-            3) read -p "Whitelist (User1,User2): " ALLOWED_USERNAMES; save_config ;;
             0) break ;;
         esac
     done
