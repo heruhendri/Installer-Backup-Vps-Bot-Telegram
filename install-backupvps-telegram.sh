@@ -694,11 +694,15 @@ echo "[OK] systemd service & timer configured."
 # with watermark header+footer and menu status option
 # ======================================================
 cat > "$MENU_FILE" <<'MENU'
+cat > "$MENU_FILE" <<'EOF'
 #!/bin/bash
 set -euo pipefail
+set -uo pipefail
 
 # PRO Menu for Auto Backup VPS — TELEGRAM BOT
 # Location expected: /opt/auto-backup/menu.sh
+CONFIG="/opt/auto-backup/config.conf"
+[[ -f "$CONFIG" ]] && source "$CONFIG" || { echo "Config not found"; exit 1; }
 
 CONFIG="/opt/auto-backup/config.conf"
 INSTALL_DIR="/opt/auto-backup"
@@ -767,6 +771,268 @@ reload_systemd() {
     systemctl restart auto-backup.service 2>/dev/null || true
     systemctl restart auto-backup-bot.service 2>/dev/null || true
     echo "[$(date '+%F %T')] Systemd reloaded & services restarted." >> "$LOGFILE"
+}
+
+rebuild_installer_files() {
+    echo "Membangun ulang service dan runner..."
+    cat > "$RUNNER" <<'BPR'
+#!/bin/bash
+set -euo pipefail
+CONFIG_FILE="/opt/auto-backup/config.conf"
+[[ -f "$CONFIG_FILE" ]] && source "$CONFIG_FILE" || exit 1
+
+# Argument parsing for selective backup
+SEL_FULL="$USE_FULL_BACKUP"; SEL_FOLDERS="y"; SEL_MYSQL="$USE_MYSQL"; SEL_MONGO="$USE_MONGO"; SEL_PG="$USE_PG"
+if [[ "${1:-}" == "--selective" && -n "${2:-}" ]]; then
+    SEL_FULL="n"; SEL_FOLDERS="n"; SEL_MYSQL="n"; SEL_MONGO="n"; SEL_PG="n"
+    [[ "$2" == *full* ]] && SEL_FULL="y"
+    [[ "$2" == *folders* ]] && SEL_FOLDERS="y"
+    [[ "$2" == *mysql* ]] && SEL_MYSQL="y"
+    [[ "$2" == *mongo* ]] && SEL_MONGO="y"
+    [[ "$2" == *pg* ]] && SEL_PG="y"
+fi
+
+update_tg_status() {
+    [[ -n "${MSG_ID:-}" ]] && curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/editMessageText" -d "chat_id=${CHAT_ID}" -d "message_id=${MSG_ID}" -d "text=$1" > /dev/null || true
+}
+
+INIT_RESP=$(curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" -d "chat_id=${CHAT_ID}" -d "text=⏳ Memulai backup...")
+MSG_ID=$(echo "$INIT_RESP" | jq -r '.result.message_id // empty')
+START_TIME=$(date +%s); BACKUP_DIR="${INSTALL_DIR}/backups"; mkdir -p "$BACKUP_DIR"
+DATE=$(date +%F-%H%M); FILE="$BACKUP_DIR/backup-$DATE.tar.gz"; TMP_DIR="${INSTALL_DIR}/tmp-$DATE"; mkdir -p "$TMP_DIR"
+
+if [[ "$SEL_FOLDERS" == "y" ]]; then
+    IFS=',' read -r -a FOLDERS <<< "${FOLDERS_RAW:-}"
+    [[ ${#FOLDERS[@]} -gt 0 ]] && update_tg_status "📂 Menyalin folder..." && rsync -a "${FOLDERS[@]}" "$TMP_DIR/" || true
+fi
+
+if [[ "$SEL_FULL" == "y" ]]; then
+    update_tg_status "🖥️ Full Backup..."
+    tar -cpzf "$TMP_DIR/root_backup.tar.gz" --exclude=/proc/* --exclude=/sys/* --exclude=/dev/* --exclude=/run/* --exclude=/tmp/* --exclude="${INSTALL_DIR}/*" / || true
+fi
+
+if [[ "$SEL_MYSQL" == "y" && -n "${MYSQL_MULTI_CONF:-}" ]]; then
+    update_tg_status "🗄️ Dump MySQL..."
+    mkdir -p "$TMP_DIR/mysql"
+    IFS=';' read -r -a ITEMS <<< "$MYSQL_MULTI_CONF"
+    for ITEM in "${ITEMS[@]}"; do
+        U=$(echo "$ITEM" | cut -d':' -f1); P=$(echo "$ITEM" | cut -d':' -f2 | cut -d'@' -f1); H=$(echo "$ITEM" | cut -d'@' -f2 | cut -d':' -f1); D=$(echo "$ITEM" | rev | cut -d':' -f1 | rev)
+        [[ "$D" == "all" ]] && mysqldump -h$H -u$U -p$P --all-databases > "$TMP_DIR/mysql/${U}@${H}_ALL.sql" 2>/dev/null || mysqldump -h$H -u$U -p$P "$D" > "$TMP_DIR/mysql/${U}@${H}_${D}.sql" 2>/dev/null || true
+    done
+fi
+
+if [[ "$SEL_MONGO" == "y" && -n "${MONGO_MULTI_CONF:-}" ]]; then
+    update_tg_status "🍃 Dump Mongo..."
+    mkdir -p "$TMP_DIR/mongo"
+    IFS=';' read -r -a ITEMS <<< "$MONGO_MULTI_CONF"
+    for ITEM in "${ITEMS[@]}"; do
+        U=$(echo "$ITEM" | cut -d':' -f1); P=$(echo "$ITEM" | cut -d':' -f2 | cut -d'@' -f1); H=$(echo "$ITEM" | cut -d'@' -f2 | cut -d':' -f1); O=$(echo "$ITEM" | cut -d':' -f4); A=$(echo "$ITEM" | cut -d':' -f5); D=$(echo "$ITEM" | rev | cut -d':' -f1 | rev)
+        BASE="--host=$H --port=$O --out=$TMP_DIR/mongo/${U}_$H"; [[ -n "$U" ]] && BASE+=" --username=$U --password='$P' --authenticationDatabase=$A"
+        [[ "$D" == "all" ]] && mongodump $BASE || mongodump $BASE --db="$D"
+    done
+fi
+
+if [[ "$SEL_PG" == "y" ]]; then
+    update_tg_status "🐘 Dump PG..."
+    mkdir -p "$TMP_DIR/postgres"; su - postgres -c "pg_dumpall > $TMP_DIR/postgres/all.sql" 2>/dev/null || true
+fi
+
+update_tg_status "📦 Kompresi..."
+TOTAL_SIZE=$(du -sb "$TMP_DIR" | awk '{print $1}')
+tar -cf - -C "$TMP_DIR" . | pv -n -s "$TOTAL_SIZE" 2> /tmp/tar_proc | gzip > "$FILE" &
+TPID=$!; while kill -0 $TPID 2>/dev/null; do update_tg_status "📦 Kompresi: $(tail -n 1 /tmp/tar_proc 2>/dev/null)%"; sleep 2; done
+
+CAPTION="📦 Backup VPS: $(hostname)\n📅 $(date '+%F %T')\n📁 Size: $(du -h "$FILE" | awk '{print $1}')"
+update_tg_status "🚀 Uploading..."
+curl -s -F document=@"$FILE" -F caption="$CAPTION" "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument?chat_id=${CHAT_ID}" || true
+[[ -n "${MSG_ID:-}" ]] && curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/deleteMessage" -d "chat_id=${CHAT_ID}" -d "message_id=${MSG_ID}" > /dev/null || true
+rm -rf "$TMP_DIR" /tmp/tar_proc; find "$BACKUP_DIR" -type f -mtime +"${RETENTION_DAYS}" -delete || true
+BPR
+    chmod +x "$RUNNER"
+    cat > "$SERVICE_FILE" <<EOT
+[Unit]
+Description=Auto Backup VPS to Telegram
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=$RUNNER
+User=root
+
+[Install]
+WantedBy=multi-user.target
+EOT
+    systemctl daemon-reload
+    echo "[OK] Rebuilt runner and service."
+}
+
+menu_scope_checkbox() {
+    while true; do
+        clear
+        echo "$WATERMARK_HEADER"
+        echo "=== MANAGE BACKUP SCOPE (CHECKBOX) ==="
+        echo "[1] [$( [[ "$USE_FULL_BACKUP" == "y" ]] && echo "X" || echo " " )] Full System Backup"
+        echo "[2] [$( [[ "$USE_MYSQL" == "y" ]] && echo "X" || echo " " )] MySQL Backup"
+        echo "[3] [$( [[ "$USE_MONGO" == "y" ]] && echo "X" || echo " " )] MongoDB Backup"
+        echo "[4] [$( [[ "$USE_PG" == "y" ]] && echo "X" || echo " " )] PostgreSQL Backup"
+        echo "--------------------------------------"
+        echo "[S] SIMPAN DAN KEMBALI"
+        echo "[0] BATAL"
+        read -p "Pilih nomor untuk toggle: " PIL
+        case "$PIL" in
+            1) [[ "$USE_FULL_BACKUP" == "y" ]] && USE_FULL_BACKUP="n" || USE_FULL_BACKUP="y" ;;
+            2) [[ "$USE_MYSQL" == "y" ]] && USE_MYSQL="n" || USE_MYSQL="y" ;;
+            3) [[ "$USE_MONGO" == "y" ]] && USE_MONGO="n" || USE_MONGO="y" ;;
+            4) [[ "$USE_PG" == "y" ]] && USE_PG="n" || USE_PG="y" ;;
+            [Ss]) save_config; rebuild_installer_files; echo "Tersimpan."; pause; break ;;
+            0) break ;;
+        esac
+    done
+}
+
+menu_bot_security() {
+    while true; do
+        clear
+        echo "$WATERMARK_HEADER"
+        echo "=== 🤖 BOT & SECURITY ==="
+        echo "[1] Edit BOT TOKEN : ${BOT_TOKEN:0:10}***"
+        echo "[2] Edit CHAT ID   : $CHAT_ID"
+        echo "[3] Edit Whitelist : $ALLOWED_USERNAMES"
+        echo "[0] Kembali"
+        read -p "Pilihan: " PIL
+        case "$PIL" in
+            1) read -p "Token Baru: " BOT_TOKEN; save_config ;;
+            2) read -p "Chat ID Baru: " CHAT_ID; save_config ;;
+            3) read -p "Whitelist (User1,User2): " ALLOWED_USERNAMES; save_config ;;
+            0) break ;;
+        esac
+    done
+}
+
+menu_db_config() {
+    while true; do
+        clear
+        echo "$WATERMARK_HEADER"
+        echo "=== 🗄️ DATABASE CONFIGURATION ==="
+        echo "[1] Manage MySQL (${USE_MYSQL})"
+        echo "[2] Manage MongoDB (${USE_MONGO})"
+        echo "[3] Test PostgreSQL (${USE_PG})"
+        echo "[0] Kembali"
+        read -p "Pilihan: " PIL
+        case "$PIL" in
+            1) menu_mysql_sub ;;
+            2) menu_mongo_sub ;;
+            3) edit_pg ;;
+            0) break ;;
+        esac
+    done
+}
+
+menu_mysql_sub() {
+    while true; do
+        clear
+        echo "--- MySQL CONFIG ---"
+        list_mysql
+        echo "[1] Tambah [2] Edit [3] Hapus [0] Kembali"
+        read -p "Aksi: " AKS
+        case "$AKS" in
+            1) add_mysql; save_config ;;
+            2) edit_mysql; save_config ;;
+            3) delete_mysql; save_config ;;
+            0) break ;;
+        esac
+    done
+}
+
+menu_mongo_sub() {
+    while true; do
+        clear
+        echo "--- MongoDB CONFIG ---"
+        list_mongo
+        echo "[1] Tambah [2] Edit [3] Hapus [0] Kembali"
+        read -p "Aksi: " AKS
+        case "$AKS" in
+            1) add_mongo; save_config ;;
+            2) edit_mongo; save_config ;;
+            3) delete_mongo; save_config ;;
+            0) break ;;
+        esac
+    done
+}
+
+menu_schedule_system() {
+    while true; do
+        clear
+        echo "$WATERMARK_HEADER"
+        echo "=== ⏰ SCHEDULE & SYSTEM ==="
+        echo "[1] Timezone        : $TZ"
+        echo "[2] Retention       : $RETENTION_DAYS hari"
+        echo "[3] OnCalendar      : $(grep OnCalendar $TIMER_FILE | cut -d'=' -f2)"
+        echo "[4] Restart Service"
+        echo "[0] Kembali"
+        read -p "Pilihan: " PIL
+        case "$PIL" in
+            1) read -p "Timezone: " TZ; timedatectl set-timezone "$TZ"; save_config ;;
+            2) read -p "Retention: " RETENTION_DAYS; save_config ;;
+            3) build_oncalendar ;;
+            4) reload_systemd; echo "Restarted."; pause ;;
+            0) break ;;
+        esac
+    done
+}
+
+menu_ops_backup() {
+    while true; do
+        clear
+        echo "$WATERMARK_HEADER"
+        echo "=== 🚀 BACKUP & RESTORE OPERATIONS ==="
+        echo "[1] Test Backup Sekarang (Full)"
+        echo "[2] Selective Backup (Checkbox CLI)"
+        echo "[3] Restore dari File Backup"
+        echo "[4] Encrypt Latest Backup (.zip)"
+        echo "[0] Kembali"
+        read -p "Pilihan: " PIL
+        case "$PIL" in
+            1) test_backup; pause ;;
+            2) selective_backup_cli ;;
+            3) restore_backup; pause ;;
+            4) encrypt_last_backup; pause ;;
+            0) break ;;
+        esac
+    done
+}
+
+main_menu_new() {
+    while true; do
+        STATUS_SERVICE=$(systemctl is-active auto-backup.service || echo "INACTIVE")
+        TOTAL_BACKUP=$(ls /opt/auto-backup/backups/*.tar.gz 2>/dev/null | wc -l)
+        clear
+        echo -e "${CYAN}========== BACKUP DASHBOARD BY HENDRI ==========${RESET}"
+        echo -e " Status  : ${GREEN}${STATUS_SERVICE}${RESET} | Total: ${BLUE}${TOTAL_BACKUP}${RESET}"
+        echo "------------------------------------------------------------"
+        echo -e "[1] 🤖 Bot & Access Control"
+        echo -e "[2] 📂 Backup Scope & Folders (Checkbox)"
+        echo -e "[3] 🗄️ Database Configurations"
+        echo -e "[4] ⏰ Schedule & Time Settings"
+        echo -e "[5] 🚀 Backup & Restore Operations"
+        echo -e "------------------------------------------------------------"
+        echo -e "[6] 📊 Live Monitor"
+        echo -e "[7] 🛠️ Repair/Update System"
+        echo -e "[0] Keluar"
+        echo -e "${BLUE}============================================================${RESET}"
+        read -p "Pilih Kategori: " MAIN_OPT
+        case "$MAIN_OPT" in
+            1) menu_bot_security ;;
+            2) menu_scope_checkbox ;;
+            3) menu_db_config ;;
+            4) menu_schedule_system ;;
+            5) menu_ops_backup ;;
+            6) show_status_live ;;
+            7) rebuild_installer_files; update_script ;;
+            0) exit 0 ;;
+            *) echo "Invalid option"; sleep 1 ;;
+        esac
+    done
 }
 
 pause() {
@@ -1165,6 +1431,7 @@ restore_backup() {
     else
         echo "Restore dibatalkan."
     fi
+    else echo "Restore dibatalkan."; fi
     rm -rf "$TMPREST"
 }
 
@@ -1252,6 +1519,9 @@ encrypt_last_backup() {
     else
         echo "Perintah zip tidak tersedia. Install zip lalu ulangi."
     fi
+    [[ -z "$LAST" ]] && { echo "No backup."; return; }
+    read -s -p "Password: " PWD; echo ""
+    zip -P "$PWD" "$INSTALL_DIR/backups/${LAST%.*}.zip" "$INSTALL_DIR/backups/$LAST" >/dev/null 2>&1 && echo "Encrypted zip created." || echo "Zip failed."
 }
 
 build_oncalendar() {
@@ -1440,6 +1710,9 @@ YELLOW="\e[93m"
 RED="\e[91m"
 CYAN="\e[36m"
 RESET="\e[0m"
+BLUE="\e[96m"; GREEN="\e[92m"; YELLOW="\e[93m"; RED="\e[91m"; CYAN="\e[36m"; RESET="\e[0m"
+main_menu_new
+EOF
 
 # ===================== LOOP REALTIME =====================
 while true; do
