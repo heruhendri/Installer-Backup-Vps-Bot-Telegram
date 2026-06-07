@@ -648,7 +648,7 @@ echo "[OK] systemd service & timer configured."
 # Install menu (menu PRO — full content based on your menu)
 # with watermark header+footer and menu status option
 # ======================================================
-cat > "$MENU_FILE" <<'MENU_FINAL_EOF'
+cat > "$MENU_FILE" <<'MENU_EOF'
 cat > "$MENU_FILE" <<'MENU_CONTENT_EOF'
 #!/bin/bash
 set -uo pipefail
