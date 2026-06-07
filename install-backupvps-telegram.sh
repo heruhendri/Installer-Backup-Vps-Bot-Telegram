@@ -434,11 +434,13 @@ echo "[OK] Backup runner created: $RUNNER"
 cat > "$BOT_CONTROL" <<'BTC'
 #!/bin/bash
 CONFIG_FILE="/opt/auto-backup/config.conf"
-source "$CONFIG_FILE"
 RUNNER="/opt/auto-backup/backup-runner.sh"
 OFFSET=0
+STATE_FILE="/tmp/bot_state"
 
 send_or_edit() {
+    # Refresh config to get latest ALLOWED_USERNAMES
+    source "$CONFIG_FILE"
     local dest="$1"
     local text="$2"
     local reply_markup="$3"
@@ -470,6 +472,27 @@ get_sel_menu() {
         '[{"text":"🚀 MULAI BACKUP","callback_data":"tg_run_'"$s"'"}]]}'
 }
 
+get_access_menu() {
+    source "$CONFIG_FILE"
+    local kb='{"inline_keyboard":[['
+    kb+='{"text":"➕ Tambah User","callback_data":"adm_add_start"},'
+    kb+='{"text":"❌ Hapus User","callback_data":"adm_del_list"}],'
+    kb+='[{"text":"⬅️ Kembali","callback_data":"back_main"}]]}'
+    echo "$kb"
+}
+
+get_del_user_menu() {
+    source "$CONFIG_FILE"
+    local kb='{"inline_keyboard":['
+    IFS=',' read -ra ADDR <<< "$ALLOWED_USERNAMES"
+    for u in "${ADDR[@]}"; do
+        [[ -z "$u" ]] && continue
+        kb+='[{"text":"🗑 @'$u'","callback_data":"adm_rmv_'$u'"}],'
+    done
+    kb+='[{"text":"⬅️ Batal","callback_data":"manage_access"}]]}'
+    echo "$kb"
+}
+
 toggle_bit() {
     local bit="$1"
     local str="$2"
@@ -490,8 +513,10 @@ map_to_args() {
 }
 
 MAIN_MENU='{"inline_keyboard":[[{"text":"🚀 Backup Sekarang","callback_data":"do_backup"},{"text":"🔄 Restore","callback_data":"do_restore"}],[{"text":"📊 Status","callback_data":"do_status"}]]}'
+ADMIN_ADD_BTN='[{"text":"⚙️ Kelola Akses","callback_data":"manage_access"}]'
 
 while true; do
+    source "$CONFIG_FILE"
     UPDATES=$(curl -s "https://api.telegram.org/bot$BOT_TOKEN/getUpdates?offset=$OFFSET&timeout=30")
     NUM_UPDATES=$(echo "$UPDATES" | jq '.result | length')
 
@@ -520,10 +545,36 @@ User ID: $SENDER_ID" "{}"
             fi
         fi
         
+        # Handle Input Text (For Adding User)
+        if [[ -f "$STATE_FILE" ]] && [[ -n "$USER_MSG" ]]; then
+            STATE=$(cat "$STATE_FILE")
+            if [[ "$STATE" == "WAIT_ADD_USER" ]]; then
+                NEW_U=$(echo "$USER_MSG" | sed 's/@//g' | tr -d '[:space:]')
+                if [[ -n "$NEW_U" ]]; then
+                    if [[ ",$ALLOWED_USERNAMES," == *",$NEW_U,"* ]]; then
+                        send_or_edit "$SENDER_ID" "User @$NEW_U sudah ada dalam daftar." "{}"
+                    else
+                        NEW_LIST="${ALLOWED_USERNAMES:-}"
+                        [[ -n "$NEW_LIST" ]] && NEW_LIST+=","
+                        NEW_LIST+="$NEW_U"
+                        sed -i "s|^ALLOWED_USERNAMES=.*|ALLOWED_USERNAMES=\"$NEW_LIST\"|" "$CONFIG_FILE"
+                        send_or_edit "$SENDER_ID" "✅ Berhasil menambah @$NEW_U ke whitelist." "$(get_access_menu)"
+                    fi
+                fi
+                rm -f "$STATE_FILE"
+                continue
+            fi
+        fi
+
         # Handle Command /start
         MSG_TEXT=$(echo "$UPDATES" | jq -r ".result[$i].message.text // empty")
         if [[ "$MSG_TEXT" == "/start" ]]; then
-            send_or_edit "$CHAT_ID" "Selamat Datang di VPS Backup Bot. Pilih aksi:" "$MAIN_MENU"
+            MENU_FINAL="$MAIN_MENU"
+            if [[ "$SENDER_ID" == "$CHAT_ID" ]]; then
+                # Tambahkan tombol admin jika sender adalah admin utama
+                MENU_FINAL=$(echo "$MAIN_MENU" | jq ".inline_keyboard += [$ADMIN_ADD_BTN]")
+            fi
+            send_or_edit "$SENDER_ID" "Selamat Datang di VPS Backup Bot. Pilih aksi:" "$MENU_FINAL"
         fi
 
         # Handle Callback Query
@@ -532,29 +583,52 @@ User ID: $SENDER_ID" "{}"
 
         if [[ -n "$CALLBACK_DATA" ]]; then
             case "$CALLBACK_DATA" in
+                back_main)
+                    MENU_FINAL=$(echo "$MAIN_MENU" | jq ".inline_keyboard += [$ADMIN_ADD_BTN]")
+                    send_or_edit "$CHAT_ID" "Selamat Datang di VPS Backup Bot. Pilih aksi:" "$MENU_FINAL" "$CB_MSG_ID"
+                    ;;
                 do_backup)
                     MENU_SEL=$(get_sel_menu "11111")
-                    send_or_edit "$CHAT_ID" "Pilih item yang ingin di-backup:" "$MENU_SEL" "$CB_MSG_ID"
+                    send_or_edit "$SENDER_ID" "Pilih item yang ingin di-backup:" "$MENU_SEL" "$CB_MSG_ID"
                     ;;
                 tg_tgl_*)
                     BIT=$(echo "$CALLBACK_DATA" | cut -d'_' -f3)
                     STR=$(echo "$CALLBACK_DATA" | cut -d'_' -f4)
                     NEW_STR=$(toggle_bit "$BIT" "$STR")
-                    send_or_edit "$CHAT_ID" "Pilih item yang ingin di-backup:" "$(get_sel_menu "$NEW_STR")" "$CB_MSG_ID"
+                    send_or_edit "$SENDER_ID" "Pilih item yang ingin di-backup:" "$(get_sel_menu "$NEW_STR")" "$CB_MSG_ID"
                     ;;
                 tg_run_*)
                     STR=$(echo "$CALLBACK_DATA" | cut -d'_' -f3)
                     ARGS=$(map_to_args "$STR")
-                    send_or_edit "$CHAT_ID" "Memulai backup selective: $ARGS" "{}" "$CB_MSG_ID"
+                    send_or_edit "$SENDER_ID" "Memulai backup selective: $ARGS" "{}" "$CB_MSG_ID"
                     bash "$RUNNER" --selective "$ARGS" &
                     ;;
                 do_status)
                     STATUS=$(systemctl is-active auto-backup.timer)
                     LAST=$(ls -t /opt/auto-backup/backups/ | head -n1)
-                    send_or_edit "$CHAT_ID" "Status Timer: $STATUS\nBackup Terakhir: $LAST" "$MAIN_MENU" "$CB_MSG_ID"
+                    send_or_edit "$SENDER_ID" "Status Timer: $STATUS\nBackup Terakhir: $LAST" "$MAIN_MENU" "$CB_MSG_ID"
                     ;;
                 do_restore)
-                    send_or_edit "$CHAT_ID" "Gunakan menu di terminal VPS (menu-bot-backup) untuk restorasi selektif demi keamanan." "$MAIN_MENU" "$CB_MSG_ID"
+                    send_or_edit "$SENDER_ID" "Gunakan menu di terminal VPS (menu-bot-backup) untuk restorasi selektif demi keamanan." "$MAIN_MENU" "$CB_MSG_ID"
+                    ;;
+                manage_access)
+                    if [[ "$SENDER_ID" == "$CHAT_ID" ]]; then
+                        send_or_edit "$CHAT_ID" "⚙️ Menu Kelola Akses Whitelist:" "$(get_access_menu)" "$CB_MSG_ID"
+                    fi
+                    ;;
+                adm_add_start)
+                    echo "WAIT_ADD_USER" > "$STATE_FILE"
+                    send_or_edit "$CHAT_ID" "Kirimkan Username Telegram yang ingin diberi akses (Tanpa @):" '{"inline_keyboard":[[{"text":"❌ Batal","callback_data":"manage_access"}]]}' "$CB_MSG_ID"
+                    ;;
+                adm_del_list)
+                    send_or_edit "$CHAT_ID" "Klik username di bawah untuk menghapus akses:" "$(get_del_user_menu)" "$CB_MSG_ID"
+                    ;;
+                adm_rmv_*)
+                    TARGET_U=$(echo "$CALLBACK_DATA" | sed 's/adm_rmv_//')
+                    # Remove from list
+                    NEW_LIST=$(echo ",$ALLOWED_USERNAMES," | sed "s/,$TARGET_U,/,/g" | sed 's/^,//;s/,$//')
+                    sed -i "s|^ALLOWED_USERNAMES=.*|ALLOWED_USERNAMES=\"$NEW_LIST\"|" "$CONFIG_FILE"
+                    send_or_edit "$CHAT_ID" "✅ Akses @$TARGET_U telah dicabut." "$(get_del_user_menu)" "$CB_MSG_ID"
                     ;;
             esac
         fi
@@ -1359,7 +1433,7 @@ selective_backup_cli() {
 
 
 update_script() {
-    REPO_URL="https://raw.githubusercontent.com/heruhendri/Installer-Backup-Vps-Bot-Telegram/master/install-backupvps-telegram.sh"
+    REPO_URL="https://raw.githubusercontent.com/heruhendri/Installer-Backup-Vps-Bot-Telegram/update/install-backupvps-telegram.sh"
     if confirm "Apakah Anda yakin ingin memperbarui script ke versi terbaru?"; then
         echo "[INFO] Mendownload script terbaru dari GitHub..."
         curl -sL "$REPO_URL" -o /tmp/update-backup.sh
