@@ -6,11 +6,11 @@
 ![Stars](https://img.shields.io/github/stars/heruhendri/Installer-Backup-Vps-Bot-Telegram?style=social)
 ![Forks](https://img.shields.io/github/forks/heruhendri/Installer-Backup-Vps-Bot-Telegram?style=social)
 ![Issues](https://img.shields.io/github/issues/heruhendri/Installer-Backup-Vps-Bot-Telegram)
-![Version](https://img.shields.io/badge/version-4.0.0-green)
+![Version](https://img.shields.io/badge/version-5.0.0-blue)
 
 ---
 
-# 🛡 **Bot Backup VPS — Telegram Auto Backup (Installer + Menu PRO)**
+# 🛡 **Bot Backup VPS — Telegram Auto Backup by HENDRI (Installer + Menu PRO)**
 
 Script ini membuat sistem **backup otomatis VPS** dengan fitur lengkap:
 

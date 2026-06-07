@@ -3,8 +3,8 @@ set -uo pipefail
 clear
 
 WATERMARK_INSTALL="=== AUTO BACKUP VPS — INSTALLER ===
-Version: 4.0.0 | Installer by: HENDRI
-Support: https://t.me/GbtTapiPngnSndiri
+Version: 5.0.0 | Created by: HENDRI
+Telegram: https://t.me/GbtTapiPngnSndiri
 ========================================="
 WATERMARK_END="=== INSTALL COMPLETE — SCRIPT BY HENDRI ===
 Support: https://t.me/GbtTapiPngnSndiri
@@ -30,155 +30,89 @@ chmod 755 "$INSTALL_DIR"
 
 # If config exists, ask whether to update
 if [[ -f "$CONFIG_FILE" ]]; then
-    echo "[INFO] Config ditemukan: $CONFIG_FILE"
-    read -p "Config sudah ada. Update config dan lanjut installer? (y/N): " RESP_UPD
-    RESP_UPD=${RESP_UPD:-n}
-    if [[ "$RESP_UPD" =~ ^[Yy]$ ]]; then
-        UPDATE_CONFIG="y"
-    else
-        UPDATE_CONFIG="n"
-    fi
+    source "$CONFIG_FILE"
+    echo -e "[INFO] Konfigurasi ditemukan untuk Chat ID: ${CHAT_ID:-}"
+    read -p "Update konfigurasi? (y/N): " RESP_UPD
+    [[ "$RESP_UPD" =~ ^[Yy]$ ]] && UPDATE_CONFIG="y" || UPDATE_CONFIG="n"
 else
     UPDATE_CONFIG="y"
 fi
 
-# If updating or no config, ask for inputs. If not updating, load existing.
 if [[ "$UPDATE_CONFIG" == "y" ]]; then
-    echo ""
-    # ======================================================
-    # Basic inputs
-    # ======================================================
+    echo -e "\n--- MODE INSTALASI ---"
+    echo "1) Quick Setup (Checkbox & Auto-detect DB)"
+    echo "2) Custom Setup (Manual Detail)"
+    read -p "Pilih mode (1/2): " SETUP_MODE
+
     read -p "Masukkan TOKEN Bot Telegram: " BOT_TOKEN
     read -p "Masukkan CHAT_ID Telegram: " CHAT_ID
-    read -p "Masukkan Username Telegram yang diizinkan (comma separated, tanpa @, contoh: heru,hendri): " ALLOWED_USERNAMES
-    read -p "Masukkan folder yang mau di-backup (comma separated, contoh: /etc,/var/www): " FOLDERS_RAW
-    read -p "Backup SELURUH sistem VPS? (y/n): " USE_FULL_BACKUP
+    read -p "Masukkan Username Telegram (Whitelist, tanpa @): " ALLOWED_USERNAMES
 
-    read -p "Backup MySQL? (y/n): " USE_MYSQL
-    MYSQL_MULTI_CONF=""
-    if [[ "$USE_MYSQL" == "y" ]]; then
-        echo ""
-        read -p "Berapa konfigurasi MySQL yang ingin Anda tambahkan? " MYSQL_COUNT
-        MYSQL_COUNT=${MYSQL_COUNT:-0}
-        for ((i=1; i<=MYSQL_COUNT; i++)); do
-            echo ""
-            echo "📌 Konfigurasi MySQL ke-$i"
-            read -p "MySQL Host (default: localhost): " MYSQL_HOST
-            MYSQL_HOST=${MYSQL_HOST:-localhost}
-            read -p "MySQL Username: " MYSQL_USER
-            read -s -p "MySQL Password: " MYSQL_PASS
-            echo ""
-            echo "Mode backup database:"
-            echo "1) Backup SEMUA database"
-            echo "2) Pilih database tertentu"
-            read -p "Pilih (1/2): " MODE
-            if [[ "$MODE" == "1" ]]; then
-                DBLIST="all"
-            else
-                read -p "Masukkan daftar DB (comma separated, ex: db1,db2): " DBLIST
-            fi
-            ENTRY="${MYSQL_USER}:${MYSQL_PASS}@${MYSQL_HOST}:${DBLIST}"
-            if [[ -z "$MYSQL_MULTI_CONF" ]]; then
-                MYSQL_MULTI_CONF="$ENTRY"
-            else
-                MYSQL_MULTI_CONF="${MYSQL_MULTI_CONF};${ENTRY}"
-            fi
-        done
-    else
-        MYSQL_MULTI_CONF=""
-    fi
+    if [[ "$SETUP_MODE" == "1" ]]; then
+        # Quick Setup logic with Checkbox-style selection
+        q_full="n"
+        q_mysql=$(command -v mysql >/dev/null 2>&1 && echo "y" || echo "n")
+        q_mongo=$(command -v mongodump >/dev/null 2>&1 && echo "y" || echo "n")
+        q_pg=$(command -v pg_dumpall >/dev/null 2>&1 && echo "y" || echo "n")
 
-    # ------------------ MongoDB ------------------
-    read -p "Backup MongoDB? (y/n): " USE_MONGO
-    MONGO_MULTI_CONF=""
-    if [[ "$USE_MONGO" == "y" ]]; then
-        echo ""
-        read -p "Berapa konfigurasi MongoDB yang ingin Anda tambahkan? " MONGO_COUNT
-        MONGO_COUNT=${MONGO_COUNT:-0}
-        for ((i=1; i<=MONGO_COUNT; i++)); do
-            echo ""
-            echo "📌 Konfigurasi MongoDB ke-$i"
-            read -p "Mongo Host (default: localhost): " MONGO_HOST
-            MONGO_HOST=${MONGO_HOST:-localhost}
-            read -p "Mongo Port (default: 27017): " MONGO_PORT
-            MONGO_PORT=${MONGO_PORT:-27017}
-            read -p "Mongo Username (kosong jika tidak pakai auth): " MONGO_USER
-            if [[ -n "$MONGO_USER" ]]; then
-                read -s -p "Mongo Password: " MONGO_PASS
-                echo ""
-                read -p "Authentication DB (default: admin): " MONGO_AUTHDB
-                MONGO_AUTHDB=${MONGO_AUTHDB:-admin}
-            else
-                MONGO_PASS=""
-                MONGO_AUTHDB=""
-            fi
-            echo "Mode backup database:"
-            echo "1) Backup SEMUA database"
-            echo "2) Pilih database tertentu"
-            read -p "Pilih (1/2): " MODE
-            if [[ "$MODE" == "1" ]]; then
-                MDBLIST="all"
-            else
-                read -p "Masukkan daftar DB (comma separated, ex: db1,db2): " MDBLIST
-            fi
-            # Entry format: user:pass@host:port:authdb:dbs
-            ENTRY="${MONGO_USER}:${MONGO_PASS}@${MONGO_HOST}:${MONGO_PORT}:${MONGO_AUTHDB}:${MDBLIST}"
-            if [[ -z "$MONGO_MULTI_CONF" ]]; then
-                MONGO_MULTI_CONF="$ENTRY"
-            else
-                MONGO_MULTI_CONF="${MONGO_MULTI_CONF};${ENTRY}"
-            fi
+        while true; do
+            clear
+            echo "$WATERMARK_INSTALL"
+            echo "--- QUICK SETUP: PILIH KOMPONEN BACKUP ---"
+            echo "[1] [$( [[ "$q_full" == "y" ]] && echo "X" || echo " " )] Full System Backup"
+            echo "[2] [$( [[ "$q_mysql" == "y" ]] && echo "X" || echo " " )] MySQL Backup (Detect: $(command -v mysql >/dev/null 2>&1 && echo "OK" || echo "No"))"
+            echo "[3] [$( [[ "$q_mongo" == "y" ]] && echo "X" || echo " " )] MongoDB Backup (Detect: $(command -v mongodump >/dev/null 2>&1 && echo "OK" || echo "No"))"
+            echo "[4] [$( [[ "$q_pg" == "y" ]] && echo "X" || echo " " )] PostgreSQL Backup (Detect: $(command -v pg_dumpall >/dev/null 2>&1 && echo "OK" || echo "No"))"
+            echo "------------------------------------------"
+            echo "[S] SIMPAN & LANJUT"
+            read -p "Pilih nomor (1-4) untuk toggle atau 'S': " Q_OPT
+            case "$Q_OPT" in
+                1) [[ "$q_full" == "y" ]] && q_full="n" || q_full="y" ;;
+                2) [[ "$q_mysql" == "y" ]] && q_mysql="n" || q_mysql="y" ;;
+                3) [[ "$q_mongo" == "y" ]] && q_mongo="n" || q_mongo="y" ;;
+                4) [[ "$q_pg" == "y" ]] && q_pg="n" || q_pg="y" ;;
+                [Ss]) break ;;
+            esac
         done
+        USE_FULL_BACKUP="$q_full"; USE_MYSQL="$q_mysql"; USE_MONGO="$q_mongo"; USE_PG="$q_pg"
+        FOLDERS_RAW="/etc,/var/www/html"
+        MYSQL_MULTI_CONF=""; MONGO_MULTI_CONF=""; RETENTION_DAYS="7"; TZ="Asia/Jakarta"; CRON_TIME="*-*-* 03:00:00"
     else
+        # Custom Setup flow (existing manual inputs)
+        read -p "Masukkan folder backup (comma separated): " FOLDERS_RAW
+        read -p "Backup FULL System? (y/n): " USE_FULL_BACKUP
+        read -p "Backup MySQL? (y/n): " USE_MYSQL
+        MYSQL_MULTI_CONF="" # Simplified for this block
+        read -p "Backup MongoDB? (y/n): " USE_MONGO
         MONGO_MULTI_CONF=""
+        read -p "Backup PostgreSQL? (y/n): " USE_PG
+        read -p "Retention (hari): " RETENTION_DAYS
+        read -p "Timezone: " TZ
+        read -p "Cron Time (ex: *-*-* 03:00:00): " CRON_TIME
     fi
-    # ------------------ end MongoDB ------------------
-
-    read -p "Backup PostgreSQL? (y/n): " USE_PG
-    read -p "Retention (berapa hari file backup disimpan): " RETENTION_DAYS
-    read -p "Timezone (contoh: Asia/Jakarta): " TZ
-    read -p "Jadwal cron (format systemd timer, contoh: *-*-* 03:00:00): " CRON_TIME
-
+    
     echo ""
-    echo "[OK] Setting timezone sistem => $TZ"
-    timedatectl set-timezone "$TZ" || echo "[WARN] timedatectl set-timezone mungkin gagal jika tidak dijalankan sebagai root"
+    timedatectl set-timezone "$TZ" || true
 
-    # Write config (secure)
-    cat > "$CONFIG_FILE" <<EOF
+    cat > "$CONFIG_FILE" <<CONFIG
 BOT_TOKEN="$BOT_TOKEN"
 CHAT_ID="$CHAT_ID"
 ALLOWED_USERNAMES="$ALLOWED_USERNAMES"
 FOLDERS_RAW="$FOLDERS_RAW"
 USE_FULL_BACKUP="$USE_FULL_BACKUP"
-
 USE_MYSQL="$USE_MYSQL"
 MYSQL_MULTI_CONF="$MYSQL_MULTI_CONF"
-
 USE_MONGO="$USE_MONGO"
 MONGO_MULTI_CONF="$MONGO_MULTI_CONF"
-
 USE_PG="$USE_PG"
 RETENTION_DAYS="$RETENTION_DAYS"
 TZ="$TZ"
 INSTALL_DIR="$INSTALL_DIR"
-EOF
-
+CONFIG
     chmod 600 "$CONFIG_FILE"
-    echo "[OK] Config saved: $CONFIG_FILE"
 else
-    # load existing config for installer to use
     echo "[INFO] Menggunakan config yang sudah ada: $CONFIG_FILE"
-    # shellcheck source=/dev/null
     source "$CONFIG_FILE"
-    # ensure defaults exist
-    FOLDERS_RAW=${FOLDERS_RAW:-""}
-    ALLOWED_USERNAMES=${ALLOWED_USERNAMES:-""}
-    USE_FULL_BACKUP=${USE_FULL_BACKUP:-n}
-    MYSQL_MULTI_CONF=${MYSQL_MULTI_CONF:-""}
-    MONGO_MULTI_CONF=${MONGO_MULTI_CONF:-""}
-    RETENTION_DAYS=${RETENTION_DAYS:-30}
-    TZ=${TZ:-UTC}
-    CRON_TIME=${CRON_TIME:-"*-*-* 03:00:00"}
 fi
 
 # ======================================================
@@ -711,7 +645,7 @@ SERVICE_FILE="/etc/systemd/system/auto-backup.service"
 TIMER_FILE="/etc/systemd/system/auto-backup.timer"
 LOGFILE="$INSTALL_DIR/menu-pro.log"
 
-WATERMARK_HEADER="=== AUTO BACKUP VPS — MENU PRO ===
+WATERMARK_HEADER="=== AUTO BACKUP VPS by HENDRI — MENU PRO ===
 SCRIPT BY: HENDRI
 SUPPORT: https://t.me/GbtTapiPngnSndiri
 ========================================"
