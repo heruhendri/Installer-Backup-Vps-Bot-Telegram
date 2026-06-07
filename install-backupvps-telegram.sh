@@ -616,8 +616,7 @@ echo "[OK] systemd service & timer configured."
 # Install menu (menu PRO — full content based on your menu)
 # with watermark header+footer and menu status option
 # ======================================================
-cat > "$MENU_FILE" <<'MENU_EOF'
-cat > "$MENU_FILE" <<'MENU_EOF'
+cat > "$MENU_FILE" <<'MENU_FINAL_EOF'
 #!/bin/bash
 set -uo pipefail
 
@@ -810,7 +809,25 @@ menu_scope_checkbox() {
             2) [[ "$USE_MYSQL" == "y" ]] && USE_MYSQL="n" || USE_MYSQL="y" ;;
             3) [[ "$USE_MONGO" == "y" ]] && USE_MONGO="n" || USE_MONGO="y" ;;
             4) [[ "$USE_PG" == "y" ]] && USE_PG="n" || USE_PG="y" ;;
-            [Aa]) read -p "Path folder baru: " NEW_F; [[ -d "$NEW_F" ]] && { FOLDERS_RAW+=",${NEW_F}"; FOLDERS_RAW="${FOLDERS_RAW#,}"; } ;;
+            [Aa])
+                read -p "Pilih: [1] Input Manual [2] Browser Sub-folder: " fopt
+                if [[ "$fopt" == "2" ]]; then
+                    read -p "Folder induk (ex: /var/www): " parent
+                    [[ ! -d "$parent" ]] && { echo "Folder tidak ada."; sleep 1; continue; }
+                    local subs=($(ls -d "${parent}/"*/ 2>/dev/null | sed 's/\/$//'))
+                    if [[ ${#subs[@]} -eq 0 ]]; then echo "Tidak ada sub-folder."; sleep 1; continue; fi
+                    for i in "${!subs[@]}"; do echo " [$((i+1))] [ ] $(basename "${subs[$i]}")"; done
+                    read -p "Pilih nomor (koma untuk banyak, ex: 1,3): " choice
+                    IFS=',' read -ra ADDR <<< "$choice"
+                    for idx in "${ADDR[@]}"; do
+                        if [[ "$idx" =~ ^[0-9]+$ ]] && (( idx > 0 && idx <= ${#subs[@]} )); then
+                            FOLDERS_RAW="${FOLDERS_RAW},${subs[$((idx-1))]}"; FOLDERS_RAW="${FOLDERS_RAW#,}"
+                        fi
+                    done
+                else
+                    read -p "Path folder: " NEW_F; [[ -d "$NEW_F" ]] && { FOLDERS_RAW="${FOLDERS_RAW},${NEW_F}"; FOLDERS_RAW="${FOLDERS_RAW#,}"; }
+                fi
+                ;;
             [1-9][0-9]*)
                 IDX=$((PIL - 10))
                 if (( IDX >= 0 && IDX < ${#FL[@]} )); then
@@ -1641,8 +1658,8 @@ RED="\e[91m"
 CYAN="\e[36m"
 RESET="\e[0m"
 BLUE="\e[96m"; GREEN="\e[92m"; YELLOW="\e[93m"; RED="\e[91m"; CYAN="\e[36m"; RESET="\e[0m"
-main_menu_new
-MENU_EOF
+main_menu_new || exit 0
+MENU_FINAL_EOF
 
 chmod +x "$MENU_FILE"
 ln -sf "$MENU_FILE" /usr/bin/menu-bot-backup
