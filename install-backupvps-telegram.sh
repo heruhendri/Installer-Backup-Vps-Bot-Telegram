@@ -55,28 +55,59 @@ if [[ "$UPDATE_CONFIG" == "y" ]]; then
         q_mongo=$(command -v mongodump >/dev/null 2>&1 && echo "y" || echo "n")
         q_pg=$(command -v pg_dumpall >/dev/null 2>&1 && echo "y" || echo "n")
 
+        # Quick Folder paths
+        f_etc="y"; f_www="y"; f_home="n"; f_root="n"
+        # Quick Retention & TZ
+        q_ret="7"
+        q_tz="Asia/Jakarta"
+
         while true; do
             clear
             echo "$WATERMARK_INSTALL"
-            echo "--- QUICK SETUP: PILIH KOMPONEN BACKUP ---"
-            echo "[1] [$( [[ "$q_full" == "y" ]] && echo "X" || echo " " )] Full System Backup"
-            echo "[2] [$( [[ "$q_mysql" == "y" ]] && echo "X" || echo " " )] MySQL Backup (Detect: $(command -v mysql >/dev/null 2>&1 && echo "OK" || echo "No"))"
-            echo "[3] [$( [[ "$q_mongo" == "y" ]] && echo "X" || echo " " )] MongoDB Backup (Detect: $(command -v mongodump >/dev/null 2>&1 && echo "OK" || echo "No"))"
-            echo "[4] [$( [[ "$q_pg" == "y" ]] && echo "X" || echo " " )] PostgreSQL Backup (Detect: $(command -v pg_dumpall >/dev/null 2>&1 && echo "OK" || echo "No"))"
+            echo "--- QUICK SETUP: CONFIGURATION ---"
+            echo "🚀 KOMPONEN:"
+            echo "  [1] [$( [[ "$q_full" == "y" ]] && echo "X" || echo " " )] Full System"
+            echo "  [2] [$( [[ "$q_mysql" == "y" ]] && echo "X" || echo " " )] MySQL (Auto: $(command -v mysql >/dev/null 2>&1 && echo "OK" || echo "No"))"
+            echo "  [3] [$( [[ "$q_mongo" == "y" ]] && echo "X" || echo " " )] MongoDB (Auto: $(command -v mongodump >/dev/null 2>&1 && echo "OK" || echo "No"))"
+            echo "  [4] [$( [[ "$q_pg" == "y" ]] && echo "X" || echo " " )] PostgreSQL (Auto: $(command -v pg_dumpall >/dev/null 2>&1 && echo "OK" || echo "No"))"
+            echo "📂 FOLDER PATHS:"
+            echo "  [5] [$( [[ "$f_etc" == "y" ]] && echo "X" || echo " " )] /etc"
+            echo "  [6] [$( [[ "$f_www" == "y" ]] && echo "X" || echo " " )] /var/www"
+            echo "  [7] [$( [[ "$f_home" == "y" ]] && echo "X" || echo " " )] /home"
+            echo "  [8] [$( [[ "$f_root" == "y" ]] && echo "X" || echo " " )] /root"
+            echo "⏰ SETTINGS:"
+            echo "  [9] Retention : $q_ret Hari (Toggle: 3, 7, 14, 30)"
+            echo "  [10] Timezone : $q_tz (Toggle: Jakarta, Singapore, UTC)"
             echo "------------------------------------------"
             echo "[S] SIMPAN & LANJUT"
-            read -p "Pilih nomor (1-4) untuk toggle atau 'S': " Q_OPT
+            read -p "Pilih nomor untuk toggle atau 'S': " Q_OPT
             case "$Q_OPT" in
                 1) [[ "$q_full" == "y" ]] && q_full="n" || q_full="y" ;;
                 2) [[ "$q_mysql" == "y" ]] && q_mysql="n" || q_mysql="y" ;;
                 3) [[ "$q_mongo" == "y" ]] && q_mongo="n" || q_mongo="y" ;;
                 4) [[ "$q_pg" == "y" ]] && q_pg="n" || q_pg="y" ;;
+                5) [[ "$f_etc" == "y" ]] && f_etc="n" || f_etc="y" ;;
+                6) [[ "$f_www" == "y" ]] && f_www="n" || f_www="y" ;;
+                7) [[ "$f_home" == "y" ]] && f_home="n" || f_home="y" ;;
+                8) [[ "$f_root" == "y" ]] && f_root="n" || f_root="y" ;;
+                9) case "$q_ret" in 3) q_ret="7";; 7) q_ret="14";; 14) q_ret="30";; *) q_ret="3";; esac ;;
+                10) case "$q_tz" in "Asia/Jakarta") q_tz="Asia/Singapore";; "Asia/Singapore") q_tz="UTC";; *) q_tz="Asia/Jakarta";; esac ;;
                 [Ss]) break ;;
             esac
         done
+
         USE_FULL_BACKUP="$q_full"; USE_MYSQL="$q_mysql"; USE_MONGO="$q_mongo"; USE_PG="$q_pg"
-        FOLDERS_RAW="/etc,/var/www/html"
-        MYSQL_MULTI_CONF=""; MONGO_MULTI_CONF=""; RETENTION_DAYS="7"; TZ="Asia/Jakarta"; CRON_TIME="*-*-* 03:00:00"
+        RETENTION_DAYS="$q_ret"; TZ="$q_tz"
+        
+        # Construct FOLDERS_RAW
+        FOLDERS_RAW=""
+        [[ "$f_etc" == "y" ]] && FOLDERS_RAW+="/etc,"
+        [[ "$f_www" == "y" ]] && FOLDERS_RAW+="/var/www,"
+        [[ "$f_home" == "y" ]] && FOLDERS_RAW+="/home,"
+        [[ "$f_root" == "y" ]] && FOLDERS_RAW+="/root,"
+        FOLDERS_RAW="${FOLDERS_RAW%,}"
+        
+        MYSQL_MULTI_CONF=""; MONGO_MULTI_CONF=""; CRON_TIME="*-*-* 03:00:00"
     else
         # Custom Setup flow (existing manual inputs)
         read -p "Masukkan folder backup (comma separated): " FOLDERS_RAW
@@ -627,11 +658,8 @@ echo "[OK] systemd service & timer configured."
 # Install menu (menu PRO — full content based on your menu)
 # with watermark header+footer and menu status option
 # ======================================================
-cat > "$MENU_FILE" <<'MENU'
-cat > "$MENU_FILE" <<'EOF'
-cat > "$MENU_FILE" <<'MENU_CONTENT'
+cat > "$MENU_FILE" <<'MENU_EOF'
 #!/bin/bash
-set -euo pipefail
 set -uo pipefail
 
 # PRO Menu for Auto Backup VPS — TELEGRAM BOT
@@ -639,7 +667,6 @@ set -uo pipefail
 CONFIG="/opt/auto-backup/config.conf"
 [[ -f "$CONFIG" ]] && source "$CONFIG" || { echo "Config not found"; exit 1; }
 
-CONFIG="/opt/auto-backup/config.conf"
 INSTALL_DIR="/opt/auto-backup"
 RUNNER="$INSTALL_DIR/backup-runner.sh"
 SERVICE_FILE="/etc/systemd/system/auto-backup.service"
@@ -1366,7 +1393,6 @@ restore_backup() {
     else
         echo "Restore dibatalkan."
     fi
-    else echo "Restore dibatalkan."; fi
     rm -rf "$TMPREST"
 }
 
@@ -1647,104 +1673,7 @@ CYAN="\e[36m"
 RESET="\e[0m"
 BLUE="\e[96m"; GREEN="\e[92m"; YELLOW="\e[93m"; RED="\e[91m"; CYAN="\e[36m"; RESET="\e[0m"
 main_menu_new
-EOF
-
-# ===================== LOOP REALTIME =====================
-while true; do
-    clear
-    STATUS_SERVICE=$(get_status_service)
-    NEXT_RUN=$(get_next_schedule)
-    LAST_BACKUP=$(get_last_backup)
-    TOTAL_BACKUP=$(get_total_backup)
-
-
-# ================== DASHBOARD ==================
-
-echo -e "${CYAN}========== BACKUP DASHBOARD BY HENDRI ==========${RESET}"
-echo ""
-echo -e " Status Service   : ${GREEN}${STATUS_SERVICE}${RESET}"
-echo -e " Next Schedule    : ${YELLOW}${NEXT_RUN}${RESET}"
-echo -e " Last Backup File : ${RED}${LAST_BACKUP}${RESET}"
-echo -e " Total Backup     : ${BLUE}${TOTAL_BACKUP}${RESET}"
-echo ""
-echo "---------------------- MENU AKSI ---------------------------"
-echo -e "${BLUE}[1]  Lihat konfigurasi${RESET}"
-echo -e "${YELLOW}[2]  Edit BOT TOKEN${RESET}"
-echo -e "${YELLOW}[3]  Edit CHAT ID${RESET}"
-echo -e "${YELLOW}[4]  Tambah folder backup${RESET}"
-echo -e "${YELLOW}[5]  Hapus folder backup${RESET}"
-echo -e "${YELLOW}[6]  Tambah konfigurasi MySQL${RESET}"
-echo -e "${YELLOW}[7]  Edit konfigurasi MySQL${RESET}"
-echo -e "${YELLOW}[8]  Hapus konfigurasi MySQL${RESET}"
-echo -e "${YELLOW}[9]  Tambah konfigurasi MongoDB${RESET}"
-echo -e "${YELLOW}[10] Edit konfigurasi MongoDB${RESET}"
-echo -e "${YELLOW}[11] Hapus konfigurasi MongoDB${RESET}"
-echo -e "${YELLOW}[12] Edit PostgreSQL settings & test dump${RESET}"
-echo -e "${YELLOW}[13] Ubah timezone${RESET}"
-echo -e "${YELLOW}[14] Ubah retention days${RESET}"
-echo -e "${YELLOW}[15] Ubah jadwal backup (OnCalendar helper)${RESET}"
-
-# ---------------- Backup / Restore ----------------
-echo -e "${GREEN}[16] Test backup sekarang${RESET}"
-echo -e "${GREEN}[17] Restore dari backup${RESET}"
-echo -e "${GREEN}[18] Rebuild / Repair installer files (service/timer/runner)${RESET}"
-echo -e "${GREEN}[19] Encrypt latest backup (zip with password)${RESET}"
-
-# ---------------- Service / Config ----------------
-echo -e "${RED}[20] Restart service & timer${RESET}"
-echo -e "${BLUE}[21] Simpan config${RESET}"
-echo -e "${BLUE}[22] Status (service / last backup / next run)${RESET}"
-echo -e "${BLUE}[23] Status Realtime (live monitor)${RESET}"
-echo -e "${BLUE}[24] Gunakan MySQL (use_mysql)${RESET}"
-echo -e "${BLUE}[25] Gunakan MongoDB (use_mongo)${RESET}"
-echo -e "${BLUE}[26] Gunakan PostgreSQL (use_pg)${RESET}"
-echo -e "${GREEN}[29] Selective Backup (Pilih item)${RESET}"
-echo -e "${YELLOW}[27] Edit Allowed Usernames${RESET}"
-echo -e "${CYAN}[28] Update Script Terbaru${RESET}"
-echo -e "${RED}[0]  Keluar (tanpa simpan)${RESET}"
-
-echo ""
-echo -e "${BLUE}============================================================${RESET}"
-
-    read -p "Pilih menu: " opt
-
-    case "$opt" in
-        1) show_config_file; pause ;;
-        2) read -p "Masukkan BOT TOKEN baru: " BOT_TOKEN; echo "[OK] BOT_TOKEN updated." ; pause ;;
-        3) read -p "Masukkan CHAT ID baru: " CHAT_ID; echo "[OK] CHAT_ID updated." ; pause ;;
-        4) add_folder; pause ;;
-        5) delete_folder; pause ;;
-        6) add_mysql; pause ;;
-        7) edit_mysql; pause ;;
-        8) delete_mysql; pause ;;
-        9) add_mongo; pause ;;
-        10) edit_mongo; pause ;;
-        11) delete_mongo; pause ;;
-        12) edit_pg; pause ;;
-        13) read -p "Masukkan timezone (ex: Asia/Jakarta): " NEWTZ; TZ="$NEWTZ"; timedatectl set-timezone "$TZ"; echo "[OK] TZ set to $TZ"; pause ;;
-        14) read -p "Masukkan retention days: " RETENTION_DAYS; echo "[OK] Retention set to $RETENTION_DAYS"; pause ;;
-        15) build_oncalendar; pause ;;
-        16) test_backup; pause ;;
-        17) restore_backup; pause ;;
-        18) if confirm "Anda yakin ingin (re)build installer files?"; then rebuild_installer_files; fi; pause ;;
-        19) encrypt_last_backup; pause ;;
-        20) reload_systemd; pause ;;
-        21) save_config; pause ;;
-        22) show_status ;;
-        23) show_status_live ;;
-        24) toggle_mysql ;;
-        25) toggle_mongo ;;
-        26) toggle_pg ;;
-        27) read -p "Masukkan daftar Username yang diizinkan (comma separated, tanpa @): " ALLOWED_USERNAMES; echo "[OK] Updated. Ingat untuk Simpan Config & Restart Service."; pause ;;
-        28) update_script ;;
-        29) selective_backup_cli ;;
-        0) echo "Keluar tanpa menyimpan." ; break ;;
-        *) echo "Pilihan tidak valid." ; sleep 1 ;;
-    esac
-done
-
-exit 0
-MENU
+MENU_EOF
 
 chmod +x "$MENU_FILE"
 ln -sf "$MENU_FILE" /usr/bin/menu-bot-backup
