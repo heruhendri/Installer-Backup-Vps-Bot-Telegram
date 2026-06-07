@@ -197,6 +197,26 @@ else
     exit 1
 fi
 
+# Argument parsing for selective backup
+MODE_SELECTIVE="n"
+SEL_FULL="n"; SEL_FOLDERS="n"; SEL_MYSQL="n"; SEL_MONGO="n"; SEL_PG="n"
+
+if [[ "${1:-}" == "--selective" && -n "${2:-}" ]]; then
+    MODE_SELECTIVE="y"
+    [[ "$2" == *full* ]] && SEL_FULL="y"
+    [[ "$2" == *folders* ]] && SEL_FOLDERS="y"
+    [[ "$2" == *mysql* ]] && SEL_MYSQL="y"
+    [[ "$2" == *mongo* ]] && SEL_MONGO="y"
+    [[ "$2" == *pg* ]] && SEL_PG="y"
+else
+    # Default mode (from config)
+    SEL_FULL="$USE_FULL_BACKUP"
+    SEL_FOLDERS="y"
+    SEL_MYSQL="$USE_MYSQL"
+    SEL_MONGO="$USE_MONGO"
+    SEL_PG="$USE_PG"
+fi
+
 update_tg_status() {
     local text="$1"
     if [[ -n "${MSG_ID:-}" ]]; then
@@ -227,6 +247,7 @@ mkdir -p "$TMP_DIR"
 START_TIME=$(date +%s)
 
 # backup folders
+if [[ "$SEL_FOLDERS" == "y" ]]; then
 IFS=',' read -r -a FOLDERS <<< "${FOLDERS_RAW:-}"
 if [[ ${#FOLDERS[@]} -gt 0 ]]; then
     update_tg_status "📂 Sedang menyalin folder ke direktori sementara..."
@@ -247,9 +268,10 @@ if [[ ${#FOLDERS[@]} -gt 0 ]]; then
         fi
     done
 fi
+fi
 
 # Full System Backup logic
-if [[ "${USE_FULL_BACKUP:-n}" == "y" ]]; then
+if [[ "$SEL_FULL" == "y" ]]; then
     echo "[INFO] Memulai Full System Backup (skipping system dirs)..."
     mkdir -p "$TMP_DIR/full_system"
     tar -cpzf "$TMP_DIR/full_system/root_backup.tar.gz" \
@@ -259,7 +281,7 @@ if [[ "${USE_FULL_BACKUP:-n}" == "y" ]]; then
 fi
 
 # backup mysql
-if [[ "${USE_MYSQL:-n}" == "y" && ! -z "${MYSQL_MULTI_CONF:-}" ]]; then
+if [[ "$SEL_MYSQL" == "y" && ! -z "${MYSQL_MULTI_CONF:-}" ]]; then
     update_tg_status "🗄️ Sedang mengekspor database MySQL..."
     mkdir -p "$TMP_DIR/mysql"
     IFS=';' read -r -a MYSQL_ITEMS <<< "$MYSQL_MULTI_CONF"
@@ -285,7 +307,7 @@ if [[ "${USE_MYSQL:-n}" == "y" && ! -z "${MYSQL_MULTI_CONF:-}" ]]; then
 fi
 
 # backup mongo
-if [[ "${USE_MONGO:-n}" == "y" && ! -z "${MONGO_MULTI_CONF:-}" ]]; then
+if [[ "$SEL_MONGO" == "y" && ! -z "${MONGO_MULTI_CONF:-}" ]]; then
     update_tg_status "🍃 Sedang mengekspor database MongoDB..."
     mkdir -p "$TMP_DIR/mongo"
     IFS=';' read -r -a MONGO_ITEMS <<< "$MONGO_MULTI_CONF"
@@ -337,7 +359,7 @@ if [[ "${USE_MONGO:-n}" == "y" && ! -z "${MONGO_MULTI_CONF:-}" ]]; then
 fi
 
 # backup postgres
-if [[ "${USE_PG:-n}" == "y" ]]; then
+if [[ "$SEL_PG" == "y" ]]; then
     update_tg_status "🐘 Sedang mengekspor database PostgreSQL..."
     mkdir -p "$TMP_DIR/postgres"
     if id -u postgres >/dev/null 2>&1; then
@@ -416,12 +438,55 @@ source "$CONFIG_FILE"
 RUNNER="/opt/auto-backup/backup-runner.sh"
 OFFSET=0
 
-send_msg() {
+send_or_edit() {
     local dest="$1"
     local text="$2"
     local reply_markup="$3"
-    curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" \
-        -d "chat_id=$dest" -d "text=$text" -d "reply_markup=$reply_markup"
+    local msg_id="${4:-}"
+
+    if [[ -n "$msg_id" ]]; then
+        curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/editMessageText" \
+            -d "chat_id=$dest" -d "message_id=$msg_id" -d "text=$text" -d "reply_markup=$reply_markup"
+    else
+        curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" \
+            -d "chat_id=$dest" -d "text=$text" -d "reply_markup=$reply_markup"
+    fi
+}
+
+get_sel_menu() {
+    local s="$1" # string 5 digit binary e.g. 11111
+    local f1=$( [[ "${s:0:1}" == "1" ]] && echo "✅" || echo "⬜" )
+    local f2=$( [[ "${s:1:1}" == "1" ]] && echo "✅" || echo "⬜" )
+    local f3=$( [[ "${s:2:1}" == "1" ]] && echo "✅" || echo "⬜" )
+    local f4=$( [[ "${s:3:1}" == "1" ]] && echo "✅" || echo "⬜" )
+    local f5=$( [[ "${s:4:1}" == "1" ]] && echo "✅" || echo "⬜" )
+
+    echo '{"inline_keyboard":[[' \
+        '{"text":"'"$f1"' Full System","callback_data":"tg_tgl_0_'"$s"'"},' \
+        '{"text":"'"$f2"' Folders","callback_data":"tg_tgl_1_'"$s"'"}],' \
+        '[{"text":"'"$f3"' MySQL","callback_data":"tg_tgl_2_'"$s"'"},' \
+        '{"text":"'"$f4"' MongoDB","callback_data":"tg_tgl_3_'"$s"'"}],' \
+        '[{"text":"'"$f5"' PostgreSQL","callback_data":"tg_tgl_4_'"$s"'"}],' \
+        '[{"text":"🚀 MULAI BACKUP","callback_data":"tg_run_'"$s"'"}]]}'
+}
+
+toggle_bit() {
+    local bit="$1"
+    local str="$2"
+    local char="${str:$bit:1}"
+    local new_char=$( [[ "$char" == "1" ]] && echo "0" || echo "1" )
+    echo "${str:0:$bit}${new_char}${str:$((bit+1))}"
+}
+
+map_to_args() {
+    local s="$1"
+    local res=""
+    [[ "${s:0:1}" == "1" ]] && res+="full,"
+    [[ "${s:1:1}" == "1" ]] && res+="folders,"
+    [[ "${s:2:1}" == "1" ]] && res+="mysql,"
+    [[ "${s:3:1}" == "1" ]] && res+="mongo,"
+    [[ "${s:4:1}" == "1" ]] && res+="pg,"
+    echo "${res%,}"
 }
 
 MAIN_MENU='{"inline_keyboard":[[{"text":"🚀 Backup Sekarang","callback_data":"do_backup"},{"text":"🔄 Restore","callback_data":"do_restore"}],[{"text":"📊 Status","callback_data":"do_status"}]]}'
@@ -442,13 +507,13 @@ while true; do
         if [[ -n "${ALLOWED_USERNAMES:-}" ]]; then
             if [[ ! ",$ALLOWED_USERNAMES," =~ ",$ACTUAL_USER," ]]; then
                 # Kirim Alert Keamanan ke Admin (CHAT_ID)
-                send_msg "$CHAT_ID" "🚨 ALERT KEAMANAN! Percobaan akses bot dari user tak dikenal:
+                send_or_edit "$CHAT_ID" "🚨 ALERT KEAMANAN! Percobaan akses bot dari user tak dikenal:
 Username: @$ACTUAL_USER
 User ID: $SENDER_ID" "{}"
                 
                 # Kirim pesan penolakan ke penyusup
                 if [[ -n "$USER_MSG" ]]; then
-                    send_msg "$SENDER_ID" "⚠️ Akses Ditolak! Anda (@$ACTUAL_USER) tidak memiliki izin untuk menggunakan bot ini." "{}"
+                    send_or_edit "$SENDER_ID" "⚠️ Akses Ditolak! Anda (@$ACTUAL_USER) tidak memiliki izin untuk menggunakan bot ini." "{}"
                 fi
                 echo "[SECURITY] Percobaan akses ilegal dari @$ACTUAL_USER ($SENDER_ID)"
                 continue
@@ -458,24 +523,38 @@ User ID: $SENDER_ID" "{}"
         # Handle Command /start
         MSG_TEXT=$(echo "$UPDATES" | jq -r ".result[$i].message.text // empty")
         if [[ "$MSG_TEXT" == "/start" ]]; then
-            send_msg "$CHAT_ID" "Selamat Datang di VPS Backup Bot. Pilih aksi:" "$MAIN_MENU"
+            send_or_edit "$CHAT_ID" "Selamat Datang di VPS Backup Bot. Pilih aksi:" "$MAIN_MENU"
         fi
 
         # Handle Callback Query
         CALLBACK_DATA=$(echo "$UPDATES" | jq -r ".result[$i].callback_query.data // empty")
+        CB_MSG_ID=$(echo "$UPDATES" | jq -r ".result[$i].callback_query.message.message_id // empty")
+
         if [[ -n "$CALLBACK_DATA" ]]; then
             case "$CALLBACK_DATA" in
                 do_backup)
-                    send_msg "$CHAT_ID" "Memulai proses backup..." "{}"
-                    bash "$RUNNER" &
+                    MENU_SEL=$(get_sel_menu "11111")
+                    send_or_edit "$CHAT_ID" "Pilih item yang ingin di-backup:" "$MENU_SEL" "$CB_MSG_ID"
+                    ;;
+                tg_tgl_*)
+                    BIT=$(echo "$CALLBACK_DATA" | cut -d'_' -f3)
+                    STR=$(echo "$CALLBACK_DATA" | cut -d'_' -f4)
+                    NEW_STR=$(toggle_bit "$BIT" "$STR")
+                    send_or_edit "$CHAT_ID" "Pilih item yang ingin di-backup:" "$(get_sel_menu "$NEW_STR")" "$CB_MSG_ID"
+                    ;;
+                tg_run_*)
+                    STR=$(echo "$CALLBACK_DATA" | cut -d'_' -f3)
+                    ARGS=$(map_to_args "$STR")
+                    send_or_edit "$CHAT_ID" "Memulai backup selective: $ARGS" "{}" "$CB_MSG_ID"
+                    bash "$RUNNER" --selective "$ARGS" &
                     ;;
                 do_status)
                     STATUS=$(systemctl is-active auto-backup.timer)
                     LAST=$(ls -t /opt/auto-backup/backups/ | head -n1)
-                    send_msg "$CHAT_ID" "Status Timer: $STATUS\nBackup Terakhir: $LAST" "$MAIN_MENU"
+                    send_or_edit "$CHAT_ID" "Status Timer: $STATUS\nBackup Terakhir: $LAST" "$MAIN_MENU" "$CB_MSG_ID"
                     ;;
                 do_restore)
-                    send_msg "$CHAT_ID" "Gunakan menu di terminal VPS (menu-bot-backup) untuk restorasi selektif demi keamanan." "$MAIN_MENU"
+                    send_or_edit "$CHAT_ID" "Gunakan menu di terminal VPS (menu-bot-backup) untuk restorasi selektif demi keamanan." "$MAIN_MENU" "$CB_MSG_ID"
                     ;;
             esac
         fi
@@ -1044,7 +1123,7 @@ TMP_DIR="$INSTALL_DIR/tmp-$DATE"
 
 mkdir -p "$TMP_DIR"
 
-update_tg_status "📂 Sedang menyalin folder..."
+if [[ "$SEL_FOLDERS" == "y" ]]; then
 IFS=',' read -r -a FOLDERS <<< "$FOLDERS_RAW"
 TOTAL_SRC_SIZE=$(du -sb "${FOLDERS[@]}" 2>/dev/null | awk '{sum+=$1} END {print sum}') || TOTAL_SRC_SIZE=0
 for f in "${FOLDERS[@]}"; do
@@ -1061,9 +1140,19 @@ for f in "${FOLDERS[@]}"; do
         done
     fi
 done
+fi
 
-if [[ "$USE_MYSQL" == "y" && ! -z "$MYSQL_MULTI_CONF" ]]; then
-    update_tg_status "🗄️ Sedang mengekspor MySQL..."
+if [[ "$SEL_FULL" == "y" ]]; then
+    update_tg_status "🖥️ Sedang memproses Full System Backup..."
+    mkdir -p "$TMP_DIR/full_system"
+    tar -cpzf "$TMP_DIR/full_system/root_backup.tar.gz" \
+        --exclude=/proc/* --exclude=/sys/* --exclude=/dev/* \
+        --exclude=/run/* --exclude=/tmp/* --exclude=/lost+found \
+        --exclude="${INSTALL_DIR}/*" / || true
+fi
+
+if [[ "$SEL_MYSQL" == "y" && ! -z "$MYSQL_MULTI_CONF" ]]; then
+    update_tg_status "�️ Sedang mengekspor MySQL..."
     mkdir -p "$TMP_DIR/mysql"
     IFS=';' read -r -a MYSQL_ITEMS <<< "$MYSQL_MULTI_CONF"
     for ITEM in "${MYSQL_ITEMS[@]}"; do
@@ -1087,7 +1176,7 @@ if [[ "$USE_MYSQL" == "y" && ! -z "$MYSQL_MULTI_CONF" ]]; then
     done
 fi
 
-if [[ "$USE_MONGO" == "y" && ! -z "$MONGO_MULTI_CONF" ]]; then
+if [[ "$SEL_MONGO" == "y" && ! -z "$MONGO_MULTI_CONF" ]]; then
     update_tg_status "🍃 Sedang mengekspor MongoDB..."
     mkdir -p "$TMP_DIR/mongo"
     IFS=';' read -r -a MONGO_ITEMS <<< "$MONGO_MULTI_CONF"
@@ -1131,7 +1220,7 @@ if [[ "$USE_MONGO" == "y" && ! -z "$MONGO_MULTI_CONF" ]]; then
     done
 fi
 
-if [[ "$USE_PG" == "y" ]]; then
+if [[ "$SEL_PG" == "y" ]]; then
     update_tg_status "🐘 Sedang mengekspor PostgreSQL..."
     mkdir -p "$TMP_DIR/postgres"
     su - postgres -c "pg_dumpall > $TMP_DIR/postgres/all.sql" || true
@@ -1233,6 +1322,41 @@ test_backup() {
     bash "$RUNNER"
     echo "Selesai. Periksa Telegram / $INSTALL_DIR/backups"
 }
+
+selective_backup_cli() {
+    local s_full="ON" s_folders="ON" s_mysql="ON" s_mongo="ON" s_pg="ON"
+    while true; do
+        clear
+        echo "=== SELECTIVE BACKUP MENU ==="
+        echo "[1] Full System : $s_full"
+        echo "[2] Folders     : $s_folders"
+        echo "[3] MySQL       : $s_mysql"
+        echo "[4] MongoDB     : $s_mongo"
+        echo "[5] PostgreSQL  : $s_pg"
+        echo "----------------------------"
+        echo "[R] JALANKAN BACKUP SEKARANG"
+        echo "[0] Batal"
+        read -p "Pilih nomor untuk toggle atau 'R' untuk mulai: " sel
+        case "$sel" in
+            1) [[ "$s_full" == "ON" ]] && s_full="OFF" || s_full="ON" ;;
+            2) [[ "$s_folders" == "ON" ]] && s_folders="OFF" || s_folders="ON" ;;
+            3) [[ "$s_mysql" == "ON" ]] && s_mysql="OFF" || s_mysql="ON" ;;
+            4) [[ "$s_mongo" == "ON" ]] && s_mongo="OFF" || s_mongo="ON" ;;
+            5) [[ "$s_pg" == "ON" ]] && s_pg="OFF" || s_pg="ON" ;;
+            [Rr]) 
+                ARGS=""
+                [[ "$s_full" == "ON" ]] && ARGS+="full,"
+                [[ "$s_folders" == "ON" ]] && ARGS+="folders,"
+                [[ "$s_mysql" == "ON" ]] && ARGS+="mysql,"
+                [[ "$s_mongo" == "ON" ]] && ARGS+="mongo,"
+                [[ "$s_pg" == "ON" ]] && ARGS+="pg,"
+                bash "$RUNNER" --selective "${ARGS%,}"
+                pause; break ;;
+            0) break ;;
+        esac
+    done
+}
+
 
 update_script() {
     REPO_URL="https://raw.githubusercontent.com/heruhendri/Installer-Backup-Vps-Bot-Telegram/master/install-backupvps-telegram.sh"
@@ -1412,6 +1536,7 @@ echo -e "${BLUE}[23] Status Realtime (live monitor)${RESET}"
 echo -e "${BLUE}[24] Gunakan MySQL (use_mysql)${RESET}"
 echo -e "${BLUE}[25] Gunakan MongoDB (use_mongo)${RESET}"
 echo -e "${BLUE}[26] Gunakan PostgreSQL (use_pg)${RESET}"
+echo -e "${GREEN}[29] Selective Backup (Pilih item)${RESET}"
 echo -e "${YELLOW}[27] Edit Allowed Usernames${RESET}"
 echo -e "${CYAN}[28] Update Script Terbaru${RESET}"
 echo -e "${RED}[0]  Keluar (tanpa simpan)${RESET}"
@@ -1450,6 +1575,7 @@ echo -e "${BLUE}============================================================${RE
         26) toggle_pg ;;
         27) read -p "Masukkan daftar Username yang diizinkan (comma separated, tanpa @): " ALLOWED_USERNAMES; echo "[OK] Updated. Ingat untuk Simpan Config & Restart Service."; pause ;;
         28) update_script ;;
+        29) selective_backup_cli ;;
         0) echo "Keluar tanpa menyimpan." ; break ;;
         *) echo "Pilihan tidak valid." ; sleep 1 ;;
     esac
