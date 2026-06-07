@@ -10,17 +10,18 @@
 
 ---
 
-# 🛡 **Bot Backup VPS — Telegram Auto Backup by HENDRI (Installer + Menu PRO)**
+# 🛡 **Bot Backup VPS — Telegram Auto Backup by HENDRI**
 
-Script ini membuat sistem **backup otomatis VPS** dengan fitur lengkap:
+Script ini menyediakan sistem **backup otomatis VPS** kelas dunia dengan antarmuka terminal yang modern dan kontrol penuh melalui Telegram Bot.
 
-* Backup folder
+* **Quick Setup Interaktif**: Instalasi super cepat dengan deteksi otomatis Database dan sistem checkbox.
+* **Sub-folder Picker**: Pilih folder spesifik di dalam direktori (misal: hanya sub-folder di `/var/www`).
 * Backup MySQL (multi-host, multi-user, multi-database)
 * Backup PostgreSQL
 * Backup MongoDB (multi-account, multi-host, multi-database)
 * **Telegram Bot Controller** (Akses Menu via Tombol Inline) — **NEW**
 * **Real-time Progress** (Persentase penyalinan & kompresi) — **NEW**
-* **Security Whitelist** (Hanya username terdaftar yang bisa akses) — **NEW**
+* **ID Security**: Akses Bot dikunci rapat hanya untuk Chat ID pemilik.
 * **Full & Selective Restore** (Restore folder tertentu saja) — **NEW**
 * systemd service + timer (OnCalendar)
 * Menu PRO untuk edit konfigurasi
@@ -92,7 +93,6 @@ Script ini membuat sistem **backup otomatis VPS** dengan fitur lengkap:
 # 🛠 Menu PRO (Dashboard Baru)
 
 Saat menjalankan:
-
 ```
 menu-bot-backup
 ```
