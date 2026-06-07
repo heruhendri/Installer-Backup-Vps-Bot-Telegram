@@ -39,27 +39,14 @@ else
 fi
 
 if [[ "$UPDATE_CONFIG" == "y" ]]; then
-    echo -e "\n--- CONFIGURATION SETUP ---"
-    
-    # Check if credentials already exist to allow skipping
-    if [[ -n "${BOT_TOKEN:-}" && -n "${CHAT_ID:-}" ]]; then
-        echo -e "[!] Token & Chat ID terdeteksi: ${BOT_TOKEN:0:10}***"
-        read -p "Gunakan kredensial yang sudah ada? (Y/n): " KEEP_CRED
-        [[ ! "$KEEP_CRED" =~ ^[Nn]$ ]] && SKIP_INPUT="y" || SKIP_INPUT="n"
-    else
-        SKIP_INPUT="n"
-    fi
-
-    if [[ "$SKIP_INPUT" == "n" ]]; then
-        read -p "Masukkan TOKEN Bot Telegram: " BOT_TOKEN
-        read -p "Masukkan CHAT_ID Telegram: " CHAT_ID
-        read -p "Masukkan Username Telegram (Whitelist, tanpa @): " ALLOWED_USERNAMES
-    fi
-
-    echo -e "\n--- PILIH MODE SETUP ---"
+    echo -e "\n--- MODE INSTALASI ---"
     echo "1) Quick Setup (Checkbox & Auto-detect DB)"
     echo "2) Custom Setup (Manual Detail)"
     read -p "Pilih mode (1/2): " SETUP_MODE
+
+    read -p "Masukkan TOKEN Bot Telegram: " BOT_TOKEN
+    read -p "Masukkan CHAT_ID Telegram: " CHAT_ID
+    read -p "Masukkan Username Telegram (Whitelist, tanpa @): " ALLOWED_USERNAMES
 
     if [[ "$SETUP_MODE" == "1" ]]; then
         # Quick Setup logic with Checkbox-style selection
@@ -671,7 +658,7 @@ echo "[OK] systemd service & timer configured."
 # Install menu (menu PRO — full content based on your menu)
 # with watermark header+footer and menu status option
 # ======================================================
-cat > "$MENU_FILE" <<'MENU_CONTENT_EOF'
+cat > "$MENU_FILE" <<'MENU_FINAL_EOF'
 #!/bin/bash
 set -uo pipefail
 
@@ -843,43 +830,20 @@ menu_scope_checkbox() {
     while true; do
         clear
         echo "$WATERMARK_HEADER"
-        echo "=== MANAGE BACKUP SCOPE & FOLDERS ==="
-        echo "🚀 COMPONENTS:"
+        echo "=== MANAGE BACKUP SCOPE (CHECKBOX) ==="
         echo "[1] [$( [[ "$USE_FULL_BACKUP" == "y" ]] && echo "X" || echo " " )] Full System Backup"
         echo "[2] [$( [[ "$USE_MYSQL" == "y" ]] && echo "X" || echo " " )] MySQL Backup"
         echo "[3] [$( [[ "$USE_MONGO" == "y" ]] && echo "X" || echo " " )] MongoDB Backup"
         echo "[4] [$( [[ "$USE_PG" == "y" ]] && echo "X" || echo " " )] PostgreSQL Backup"
-        echo ""
-        echo "📂 FOLDERS TO BACKUP (Toggle to remove):"
-        IFS=',' read -ra FL <<< "$FOLDERS_RAW"
-        local i=10
-        for folder in "${FL[@]}"; do
-            [[ -z "$folder" ]] && continue
-            echo " [$i] [X] $folder"
-            ((i++))
-        done
-        echo " [A] [+] Tambah Folder Baru"
-        echo "--------------------------------------------"
+        echo "--------------------------------------"
         echo "[S] SIMPAN DAN KEMBALI"
         echo "[0] BATAL"
-        read -p "Pilih nomor/huruf: " PIL
+        read -p "Pilih nomor untuk toggle: " PIL
         case "$PIL" in
             1) [[ "$USE_FULL_BACKUP" == "y" ]] && USE_FULL_BACKUP="n" || USE_FULL_BACKUP="y" ;;
             2) [[ "$USE_MYSQL" == "y" ]] && USE_MYSQL="n" || USE_MYSQL="y" ;;
             3) [[ "$USE_MONGO" == "y" ]] && USE_MONGO="n" || USE_MONGO="y" ;;
             4) [[ "$USE_PG" == "y" ]] && USE_PG="n" || USE_PG="y" ;;
-            [Aa])
-                read -p "Masukkan path folder baru: " NEW_F
-                if [[ -d "$NEW_F" ]]; then
-                    FOLDERS_RAW="${FOLDERS_RAW},${NEW_F}"; FOLDERS_RAW="${FOLDERS_RAW#,}"
-                else echo "Folder tidak valid!"; sleep 1; fi ;;
-            [1-9][0-9]*)
-                IDX=$((PIL - 10))
-                if (( IDX >= 0 && IDX < ${#FL[@]} )); then
-                    unset 'FL[IDX]'
-                    FOLDERS_RAW=$(IFS=,; echo "${FL[*]}")
-                    FOLDERS_RAW="${FOLDERS_RAW%,}"
-                fi ;;
             [Ss]) save_config; rebuild_installer_files; echo "Tersimpan."; pause; break ;;
             0) break ;;
         esac
@@ -1707,7 +1671,7 @@ CYAN="\e[36m"
 RESET="\e[0m"
 BLUE="\e[96m"; GREEN="\e[92m"; YELLOW="\e[93m"; RED="\e[91m"; CYAN="\e[36m"; RESET="\e[0m"
 main_menu_new
-MENU_CONTENT_EOF
+MENU_EOF
 
 chmod +x "$MENU_FILE"
 ln -sf "$MENU_FILE" /usr/bin/menu-bot-backup
