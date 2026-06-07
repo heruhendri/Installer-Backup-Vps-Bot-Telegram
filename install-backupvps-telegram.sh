@@ -31,34 +31,26 @@ chmod 755 "$INSTALL_DIR"
 # If config exists, ask whether to update
 if [[ -f "$CONFIG_FILE" ]]; then
     source "$CONFIG_FILE"
-    echo -e "[INFO] Konfigurasi lama ditemukan (Chat ID: $CHAT_ID)."
-    read -p "Gunakan kredensial (Token/ChatID) yang ada? (Y/n): " KEEP_CRED
-    if [[ ! "$KEEP_CRED" =~ ^[Nn]$ ]]; then
-        SKIP_AUTH="y"
-        UPDATE_CONFIG="y"
-    else
-        SKIP_AUTH="n"
-        UPDATE_CONFIG="y"
-    fi
+    echo -e "[INFO] Konfigurasi ditemukan untuk Chat ID: ${CHAT_ID:-}"
+    read -p "Update konfigurasi? (y/N): " RESP_UPD
+    [[ "$RESP_UPD" =~ ^[Yy]$ ]] && UPDATE_CONFIG="y" || UPDATE_CONFIG="n"
 else
     UPDATE_CONFIG="y"
-    SKIP_AUTH="n"
 fi
 
 if [[ "$UPDATE_CONFIG" == "y" ]]; then
-    if [[ "$SKIP_AUTH" == "n" ]]; then
-        read -p "Masukkan TOKEN Bot Telegram: " BOT_TOKEN
-        read -p "Masukkan CHAT_ID Telegram: " CHAT_ID
-    fi
-
     echo -e "\n--- MODE INSTALASI ---"
     echo "1) Quick Setup (Checkbox & Auto-detect DB)"
     echo "2) Custom Setup (Manual Detail)"
     read -p "Pilih mode (1/2): " SETUP_MODE
 
+    read -p "Masukkan TOKEN Bot Telegram: " BOT_TOKEN
+    read -p "Masukkan CHAT_ID Telegram: " CHAT_ID
+    read -p "Masukkan Username Telegram (Whitelist, tanpa @): " ALLOWED_USERNAMES
+
     if [[ "$SETUP_MODE" == "1" ]]; then
         # Quick Setup logic with Checkbox-style selection
-        q_full="y"
+        q_full="n"
         q_mysql=$(command -v mysql >/dev/null 2>&1 && echo "y" || echo "n")
         q_mongo=$(command -v mongodump >/dev/null 2>&1 && echo "y" || echo "n")
         q_pg=$(command -v pg_dumpall >/dev/null 2>&1 && echo "y" || echo "n")
@@ -66,7 +58,7 @@ if [[ "$UPDATE_CONFIG" == "y" ]]; then
         # Quick Folder paths
         f_etc="y"; f_www="y"; f_home="n"; f_root="n"
         # Quick Retention & TZ
-        q_ret="${RETENTION_DAYS:-7}"
+        q_ret="7"
         q_tz="Asia/Jakarta"
 
         while true; do
@@ -408,8 +400,10 @@ cat > "$BOT_CONTROL" <<'BTC'
 CONFIG_FILE="/opt/auto-backup/config.conf"
 RUNNER="/opt/auto-backup/backup-runner.sh"
 OFFSET=0
+STATE_FILE="/tmp/bot_state"
 
 send_or_edit() {
+    # Refresh config to get latest ALLOWED_USERNAMES
     source "$CONFIG_FILE"
     local dest="$1"
     local text="$2"
@@ -442,6 +436,27 @@ get_sel_menu() {
         '[{"text":"🚀 MULAI BACKUP","callback_data":"tg_run_'"$s"'"}]]}'
 }
 
+get_access_menu() {
+    source "$CONFIG_FILE"
+    local kb='{"inline_keyboard":[['
+    kb+='{"text":"➕ Tambah User","callback_data":"adm_add_start"},'
+    kb+='{"text":"❌ Hapus User","callback_data":"adm_del_list"}],'
+    kb+='[{"text":"⬅️ Kembali","callback_data":"back_main"}]]}'
+    echo "$kb"
+}
+
+get_del_user_menu() {
+    source "$CONFIG_FILE"
+    local kb='{"inline_keyboard":['
+    IFS=',' read -ra ADDR <<< "$ALLOWED_USERNAMES"
+    for u in "${ADDR[@]}"; do
+        [[ -z "$u" ]] && continue
+        kb+='[{"text":"🗑 @'$u'","callback_data":"adm_rmv_'$u'"}],'
+    done
+    kb+='[{"text":"⬅️ Batal","callback_data":"manage_access"}]]}'
+    echo "$kb"
+}
+
 toggle_bit() {
     local bit="$1"
     local str="$2"
@@ -462,6 +477,7 @@ map_to_args() {
 }
 
 MAIN_MENU='{"inline_keyboard":[[{"text":"🚀 Backup Sekarang","callback_data":"do_backup"},{"text":"🔄 Restore","callback_data":"do_restore"}],[{"text":"📊 Status","callback_data":"do_status"}]]}'
+ADMIN_ADD_BTN='[{"text":"⚙️ Kelola Akses","callback_data":"manage_access"}]'
 
 while true; do
     source "$CONFIG_FILE"
@@ -776,11 +792,13 @@ menu_bot_security() {
         echo "=== 🤖 BOT & SECURITY ==="
         echo "[1] Edit BOT TOKEN : ${BOT_TOKEN:0:10}***"
         echo "[2] Edit CHAT ID   : $CHAT_ID"
+        echo "[3] Edit Whitelist : $ALLOWED_USERNAMES"
         echo "[0] Kembali"
         read -p "Pilihan: " PIL
         case "$PIL" in
             1) read -p "Token Baru: " BOT_TOKEN; save_config ;;
             2) read -p "Chat ID Baru: " CHAT_ID; save_config ;;
+            3) read -p "Whitelist (User1,User2): " ALLOWED_USERNAMES; save_config ;;
             0) break ;;
         esac
     done
