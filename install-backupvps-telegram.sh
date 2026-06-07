@@ -1,5 +1,5 @@
 #!/bin/bash
-set -uo pipefail
+set -e
 clear
 
 WATERMARK_INSTALL="=== AUTO BACKUP VPS — INSTALLER ===
@@ -30,60 +30,45 @@ chmod 755 "$INSTALL_DIR"
 
 # If config exists, ask whether to update
 if [[ -f "$CONFIG_FILE" ]]; then
+    # shellcheck source=/dev/null
     source "$CONFIG_FILE"
-    echo -e "[INFO] Konfigurasi ditemukan untuk Chat ID: ${CHAT_ID:-}"
-    read -p "Update konfigurasi? (y/N): " RESP_UPD
-    [[ "$RESP_UPD" =~ ^[Yy]$ ]] && UPDATE_CONFIG="y" || UPDATE_CONFIG="n"
     echo -e "[INFO] Konfigurasi lama ditemukan (Chat ID: $CHAT_ID)."
     read -p "Gunakan kredensial (Token/ChatID) yang ada? (Y/n): " KEEP_CRED
     if [[ ! "$KEEP_CRED" =~ ^[Nn]$ ]]; then
         SKIP_AUTH="y"
-        UPDATE_CONFIG="y"
     else
         SKIP_AUTH="n"
-        UPDATE_CONFIG="y"
     fi
+    UPDATE_CONFIG="y"
 else
     UPDATE_CONFIG="y"
     SKIP_AUTH="n"
 fi
 
 if [[ "$UPDATE_CONFIG" == "y" ]]; then
-    echo -e "\n--- MODE INSTALASI ---"
     if [[ "$SKIP_AUTH" == "n" ]]; then
         read -p "Masukkan TOKEN Bot Telegram: " BOT_TOKEN
         read -p "Masukkan CHAT_ID Telegram: " CHAT_ID
     fi
 
-    echo -e "\n--- MODE INSTALASI (By HENDRI) ---"
+    echo -e "\n--- PILIH MODE SETUP (By HENDRI) ---"
     echo "1) Quick Setup (Checkbox & Auto-detect DB)"
     echo "2) Custom Setup (Manual Detail)"
     read -p "Pilih mode (1/2): " SETUP_MODE
 
-    read -p "Masukkan TOKEN Bot Telegram: " BOT_TOKEN
-    read -p "Masukkan CHAT_ID Telegram: " CHAT_ID
-    read -p "Masukkan Username Telegram (Whitelist, tanpa @): " ALLOWED_USERNAMES
-
     if [[ "$SETUP_MODE" == "1" ]]; then
         # Quick Setup logic with Checkbox-style selection
         q_full="n"
-        q_full="y"
         q_mysql=$(command -v mysql >/dev/null 2>&1 && echo "y" || echo "n")
         q_mongo=$(command -v mongodump >/dev/null 2>&1 && echo "y" || echo "n")
         q_pg=$(command -v pg_dumpall >/dev/null 2>&1 && echo "y" || echo "n")
 
-        # Quick Folder paths
-        f_etc="y"; f_www="y"; f_home="n"; f_root="n"
-        # Quick Retention & TZ
-        q_ret="7"
-        q_tz="Asia/Jakarta"
         # Folder management variables
         f_etc="/etc"; use_etc="y"
         f_www="/var/www"; use_www="y"
         f_home="/home"; use_home="n"
         f_root="/root"; use_root="n"
-        q_ret="${RETENTION_DAYS:-7}"
-        q_tz="${TZ:-Asia/Jakarta}"
+        q_ret="7"; q_tz="Asia/Jakarta"
 
         pick_sub() {
             local parent=$1
@@ -103,26 +88,20 @@ if [[ "$UPDATE_CONFIG" == "y" ]]; then
         while true; do
             clear
             echo "$WATERMARK_INSTALL"
-            echo "--- QUICK SETUP: CONFIGURATION ---"
-            echo "--- QUICK SETUP: COMPONENTS & FOLDERS ---"
+            echo "--- QUICK SETUP: COMPONENTS & FOLDERS (CHECKBOX) ---"
             echo "🚀 KOMPONEN:"
             echo "  [1] [$( [[ "$q_full" == "y" ]] && echo "X" || echo " " )] Full System"
             echo "  [2] [$( [[ "$q_mysql" == "y" ]] && echo "X" || echo " " )] MySQL (Auto: $(command -v mysql >/dev/null 2>&1 && echo "OK" || echo "No"))"
             echo "  [3] [$( [[ "$q_mongo" == "y" ]] && echo "X" || echo " " )] MongoDB (Auto: $(command -v mongodump >/dev/null 2>&1 && echo "OK" || echo "No"))"
             echo "  [4] [$( [[ "$q_pg" == "y" ]] && echo "X" || echo " " )] PostgreSQL (Auto: $(command -v pg_dumpall >/dev/null 2>&1 && echo "OK" || echo "No"))"
-            echo "📂 FOLDER PATHS:"
-            echo "  [5] [$( [[ "$f_etc" == "y" ]] && echo "X" || echo " " )] /etc"
-            echo "  [6] [$( [[ "$f_www" == "y" ]] && echo "X" || echo " " )] /var/www"
-            echo "  [7] [$( [[ "$f_home" == "y" ]] && echo "X" || echo " " )] /home"
-            echo "  [8] [$( [[ "$f_root" == "y" ]] && echo "X" || echo " " )] /root"
-            echo "📂 FOLDER PATHS (Klik untuk pilih sub-folder):"
+            echo "📂 FOLDERS (Pilih nomor untuk toggle/subfolder):"
             echo "  [5] [$( [[ "$use_etc" == "y" ]] && echo "X" || echo " " )] $f_etc"
             echo "  [6] [$( [[ "$use_www" == "y" ]] && echo "X" || echo " " )] $f_www"
             echo "  [7] [$( [[ "$use_home" == "y" ]] && echo "X" || echo " " )] $f_home"
             echo "  [8] [$( [[ "$use_root" == "y" ]] && echo "X" || echo " " )] $f_root"
             echo "⏰ SETTINGS:"
-            echo "  [9] Retention : $q_ret Hari (Toggle: 3, 7, 14, 30)"
-            echo "  [10] Timezone : $q_tz (Toggle: Jakarta, Singapore, UTC)"
+            echo "  [9] Retention : $q_ret Hari"
+            echo "  [10] Timezone : $q_tz"
             echo "------------------------------------------"
             echo "[S] SIMPAN & LANJUT"
             read -p "Pilih nomor untuk toggle atau 'S': " Q_OPT
@@ -131,10 +110,6 @@ if [[ "$UPDATE_CONFIG" == "y" ]]; then
                 2) [[ "$q_mysql" == "y" ]] && q_mysql="n" || q_mysql="y" ;;
                 3) [[ "$q_mongo" == "y" ]] && q_mongo="n" || q_mongo="y" ;;
                 4) [[ "$q_pg" == "y" ]] && q_pg="n" || q_pg="y" ;;
-                5) [[ "$f_etc" == "y" ]] && f_etc="n" || f_etc="y" ;;
-                6) [[ "$f_www" == "y" ]] && f_www="n" || f_www="y" ;;
-                7) [[ "$f_home" == "y" ]] && f_home="n" || f_home="y" ;;
-                8) [[ "$f_root" == "y" ]] && f_root="n" || f_root="y" ;;
                 5) if [[ "$use_etc" == "y" ]]; then use_etc="n"; else use_etc="y"; f_etc=$(pick_sub "/etc"); fi ;;
                 6) if [[ "$use_www" == "y" ]]; then use_www="n"; else use_www="y"; f_www=$(pick_sub "/var/www"); fi ;;
                 7) if [[ "$use_home" == "y" ]]; then use_home="n"; else use_home="y"; f_home=$(pick_sub "/home"); fi ;;
