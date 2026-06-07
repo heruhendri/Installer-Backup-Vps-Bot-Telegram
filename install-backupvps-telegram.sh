@@ -14,7 +14,7 @@ echo "$WATERMARK_INSTALL"
 echo ""
 
 # Install dependencies
-apt-get update && apt-get install -y jq curl rsync zip unzip || echo "[WARN] Gagal menginstall dependensi, pastikan Anda root."
+apt-get update && apt-get install -y jq curl rsync zip unzip bc pv || echo "[WARN] Gagal menginstall dependensi, pastikan Anda root."
 
 INSTALL_DIR="/opt/auto-backup"
 CONFIG_FILE="$INSTALL_DIR/config.conf"
@@ -194,6 +194,22 @@ else
     exit 1
 fi
 
+update_tg_status() {
+    local text="$1"
+    if [[ -n "${MSG_ID:-}" ]]; then
+        curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/editMessageText" \
+            -d "chat_id=${CHAT_ID}" \
+            -d "message_id=${MSG_ID}" \
+            -d "text=${text}" > /dev/null || true
+    fi
+}
+
+# Kirim pesan status awal dan ambil Message ID
+INIT_RESP=$(curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+    -d "chat_id=${CHAT_ID}" \
+    -d "text=⏳ Memulai proses backup di VPS...")
+MSG_ID=$(echo "$INIT_RESP" | jq -r '.result.message_id // empty')
+
 export TZ="${TZ:-UTC}"
 
 BACKUP_DIR="${INSTALL_DIR}/backups"
@@ -206,13 +222,28 @@ TMP_DIR="${INSTALL_DIR}/tmp-$DATE"
 mkdir -p "$TMP_DIR"
 # Set waktu mulai durasi backup
 START_TIME=$(date +%s)
+
 # backup folders
 IFS=',' read -r -a FOLDERS <<< "${FOLDERS_RAW:-}"
-for f in "${FOLDERS[@]}"; do
-    if [[ -d "$f" ]]; then
-        cp -a "$f" "$TMP_DIR/" || true
-    fi
-done
+if [[ ${#FOLDERS[@]} -gt 0 ]]; then
+    update_tg_status "📂 Sedang menyalin folder ke direktori sementara..."
+    TOTAL_SRC_SIZE=$(du -sb "${FOLDERS[@]}" 2>/dev/null | awk '{sum+=$1} END {print sum}') || TOTAL_SRC_SIZE=0
+    
+    for f in "${FOLDERS[@]}"; do
+        if [[ -d "$f" ]]; then
+            rsync -a "$f" "$TMP_DIR/" &
+            RSYNC_PID=$!
+            while kill -0 $RSYNC_PID 2>/dev/null; do
+                if [[ "$TOTAL_SRC_SIZE" -gt 0 ]]; then
+                    CUR_SIZE=$(du -sb "$TMP_DIR" 2>/dev/null | awk '{print $1}')
+                    PCT=$(echo "scale=0; ($CUR_SIZE * 100) / $TOTAL_SRC_SIZE" | bc -l 2>/dev/null || echo 0)
+                    update_tg_status "📂 Sedang menyalin folder: $PCT%"
+                fi
+                sleep 2
+            done
+        fi
+    done
+fi
 
 # Full System Backup logic
 if [[ "${USE_FULL_BACKUP:-n}" == "y" ]]; then
@@ -226,6 +257,7 @@ fi
 
 # backup mysql
 if [[ "${USE_MYSQL:-n}" == "y" && ! -z "${MYSQL_MULTI_CONF:-}" ]]; then
+    update_tg_status "🗄️ Sedang mengekspor database MySQL..."
     mkdir -p "$TMP_DIR/mysql"
     IFS=';' read -r -a MYSQL_ITEMS <<< "$MYSQL_MULTI_CONF"
     for ITEM in "${MYSQL_ITEMS[@]}"; do
@@ -251,6 +283,7 @@ fi
 
 # backup mongo
 if [[ "${USE_MONGO:-n}" == "y" && ! -z "${MONGO_MULTI_CONF:-}" ]]; then
+    update_tg_status "🍃 Sedang mengekspor database MongoDB..."
     mkdir -p "$TMP_DIR/mongo"
     IFS=';' read -r -a MONGO_ITEMS <<< "$MONGO_MULTI_CONF"
     for ITEM in "${MONGO_ITEMS[@]}"; do
@@ -302,6 +335,7 @@ fi
 
 # backup postgres
 if [[ "${USE_PG:-n}" == "y" ]]; then
+    update_tg_status "🐘 Sedang mengekspor database PostgreSQL..."
     mkdir -p "$TMP_DIR/postgres"
     if id -u postgres >/dev/null 2>&1; then
         su - postgres -c "pg_dumpall > $TMP_DIR/postgres/all.sql" || true
@@ -310,7 +344,17 @@ if [[ "${USE_PG:-n}" == "y" ]]; then
     fi
 fi
 
-tar -czf "$FILE" -C "$TMP_DIR" . || (echo "[ERROR] tar failed"; exit 1)
+update_tg_status "📦 Sedang mengompres data (Real-time Progress)..."
+# Gunakan pv untuk memantau progres kompresi
+TOTAL_TMP_SIZE=$(du -sb "$TMP_DIR" | awk '{print $1}')
+tar -cf - -C "$TMP_DIR" . | pv -n -s "$TOTAL_TMP_SIZE" 2> /tmp/tar_proc | gzip > "$FILE" &
+TAR_PID=$!
+while kill -0 $TAR_PID 2>/dev/null; do
+    PCT_TAR=$(tail -n 1 /tmp/tar_proc 2>/dev/null || echo 0)
+    update_tg_status "📦 Sedang mengompres: $PCT_TAR%"
+    sleep 2
+done
+rm -f /tmp/tar_proc
 
 # Hitung durasi & info file
 END_TIME=$(date +%s)
@@ -329,6 +373,8 @@ CAPTION="📦 Backup Selesai
 📁 Ukuran File: ${FILE_SIZE}
 📄 Nama File: $(basename "$FILE")"
 
+update_tg_status "🚀 Mengunggah file ke Telegram..."
+
 # Kirim ke Telegram
 if [[ -n "${BOT_TOKEN:-}" && -n "${CHAT_ID:-}" ]]; then
     curl -s -F document=@"$FILE" \
@@ -336,6 +382,11 @@ if [[ -n "${BOT_TOKEN:-}" && -n "${CHAT_ID:-}" ]]; then
          "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument?chat_id=${CHAT_ID}" || true
 else
     echo "[WARN] BOT_TOKEN/CHAT_ID kosong; melewatkan kirim ke Telegram"
+fi
+
+# Hapus pesan status progress agar bersih
+if [[ -n "${MSG_ID:-}" ]]; then
+    curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/deleteMessage" -d "chat_id=${CHAT_ID}" -d "message_id=${MSG_ID}" > /dev/null || true
 fi
 
 # cleanup temp
@@ -941,6 +992,18 @@ rebuild_installer_files() {
 CONFIG_FILE="/opt/auto-backup/config.conf"
 source "$CONFIG_FILE"
 
+update_tg_status() {
+    local text="$1"
+    if [[ -n "${MSG_ID:-}" ]]; then
+        curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/editMessageText" \
+            -d "chat_id=${CHAT_ID}" -d "message_id=${MSG_ID}" -d "text=${text}" > /dev/null || true
+    fi
+}
+
+INIT_RESP=$(curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+    -d "chat_id=${CHAT_ID}" -d "text=⏳ Memulai proses backup...")
+MSG_ID=$(echo "$INIT_RESP" | jq -r '.result.message_id // empty')
+
 export TZ="${TZ:-UTC}"
 
 BACKUP_DIR="$INSTALL_DIR/backups"
@@ -952,14 +1015,26 @@ TMP_DIR="$INSTALL_DIR/tmp-$DATE"
 
 mkdir -p "$TMP_DIR"
 
+update_tg_status "📂 Sedang menyalin folder..."
 IFS=',' read -r -a FOLDERS <<< "$FOLDERS_RAW"
+TOTAL_SRC_SIZE=$(du -sb "${FOLDERS[@]}" 2>/dev/null | awk '{sum+=$1} END {print sum}') || TOTAL_SRC_SIZE=0
 for f in "${FOLDERS[@]}"; do
     if [ -d "$f" ]; then
-        cp -a "$f" "$TMP_DIR/" || true
+        rsync -a "$f" "$TMP_DIR/" &
+        RSYNC_PID=$!
+        while kill -0 $RSYNC_PID 2>/dev/null; do
+            if [[ "$TOTAL_SRC_SIZE" -gt 0 ]]; then
+                CUR_SIZE=$(du -sb "$TMP_DIR" 2>/dev/null | awk '{print $1}')
+                PCT=$(echo "scale=0; ($CUR_SIZE * 100) / $TOTAL_SRC_SIZE" | bc -l 2>/dev/null || echo 0)
+                update_tg_status "📂 Sedang menyalin: $PCT%"
+            fi
+            sleep 2
+        done
     fi
 done
 
 if [[ "$USE_MYSQL" == "y" && ! -z "$MYSQL_MULTI_CONF" ]]; then
+    update_tg_status "🗄️ Sedang mengekspor MySQL..."
     mkdir -p "$TMP_DIR/mysql"
     IFS=';' read -r -a MYSQL_ITEMS <<< "$MYSQL_MULTI_CONF"
     for ITEM in "${MYSQL_ITEMS[@]}"; do
@@ -984,6 +1059,7 @@ if [[ "$USE_MYSQL" == "y" && ! -z "$MYSQL_MULTI_CONF" ]]; then
 fi
 
 if [[ "$USE_MONGO" == "y" && ! -z "$MONGO_MULTI_CONF" ]]; then
+    update_tg_status "🍃 Sedang mengekspor MongoDB..."
     mkdir -p "$TMP_DIR/mongo"
     IFS=';' read -r -a MONGO_ITEMS <<< "$MONGO_MULTI_CONF"
     for ITEM in "${MONGO_ITEMS[@]}"; do
@@ -1027,13 +1103,25 @@ if [[ "$USE_MONGO" == "y" && ! -z "$MONGO_MULTI_CONF" ]]; then
 fi
 
 if [[ "$USE_PG" == "y" ]]; then
+    update_tg_status "🐘 Sedang mengekspor PostgreSQL..."
     mkdir -p "$TMP_DIR/postgres"
     su - postgres -c "pg_dumpall > $TMP_DIR/postgres/all.sql" || true
 fi
 
-tar -czf "$FILE" -C "$TMP_DIR" . || true
+update_tg_status "📦 Sedang mengompres data..."
+TOTAL_TMP_SIZE=$(du -sb "$TMP_DIR" | awk '{print $1}')
+tar -cf - -C "$TMP_DIR" . | pv -n -s "$TOTAL_TMP_SIZE" 2> /tmp/tar_proc | gzip > "$FILE" &
+TAR_PID=$!
+while kill -0 $TAR_PID 2>/dev/null; do
+    PCT_TAR=$(tail -n 1 /tmp/tar_proc 2>/dev/null || echo 0)
+    update_tg_status "📦 Sedang mengompres: $PCT_TAR%"
+    sleep 2
+done
+
+update_tg_status "🚀 Mengunggah file..."
 curl -s -F document=@"$FILE" -F caption="Backup selesai: $(basename $FILE)" "https://api.telegram.org/bot$BOT_TOKEN/sendDocument?chat_id=$CHAT_ID" || true
 
+curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/deleteMessage" -d "chat_id=${CHAT_ID}" -d "message_id=${MSG_ID}" > /dev/null || true
 rm -rf "$TMP_DIR"
 find "$BACKUP_DIR" -type f -mtime +$RETENTION_DAYS -delete || true
 EOR
